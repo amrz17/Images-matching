@@ -7,6 +7,10 @@ from ultralytics import YOLO
 import os
 import cv2
 from werkzeug.utils import secure_filename
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from PIL import Image
+
 
 # Inisialisasi SQLAlchemy dan Marshmallow
 db = SQLAlchemy()
@@ -47,8 +51,8 @@ def create_app():
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Konfigurasi upload folder
-    app.config['UPLOAD_FOLDER'] = 'static/images/vehicles/masuk'
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    app.config['UPLOAD_FOLDER_IN'] = 'static/images/vehicles/masuk'
+    os.makedirs(app.config['UPLOAD_FOLDER_IN'], exist_ok=True)
 
     app.config['UPLOAD_FOLDER'] = 'static/images/vehicles/keluar'
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -67,6 +71,43 @@ def create_app():
     def hello():
         return 'Hello, Flask di Ubuntu!'
 
+    def extract_yolo_features(result, model_labels):
+        detections = result[0].boxes
+        boxes = detections.xywh.cpu().numpy()
+        scores = detections.conf.cpu().numpy()
+        classes = detections.cls.cpu().numpy().astype(int)
+
+        label_counts = {label: 0 for label in model_labels.values()}
+        confidence_per_label = {label: [] for label in model_labels.values()}
+
+        widths = []
+        heights = []
+
+        for i, box in enumerate(boxes):
+            class_idx = classes[i]
+            label = model_labels[class_idx]
+            confidence = scores[i]
+
+            label_counts[label] += 1
+            confidence_per_label[label].append(confidence)
+
+            widths.append(box[2])
+            heights.append(box[3])
+
+        # Buat vektor fitur
+        feature_vector = []
+        for label in model_labels.values():
+            feature_vector.append(label_counts[label])
+            avg_conf = np.mean(confidence_per_label[label]) if confidence_per_label[label] else 0
+            feature_vector.append(avg_conf)
+
+        # Tambahkan ukuran rata-rata bbox
+        feature_vector.append(np.mean(widths) if widths else 0)
+        feature_vector.append(np.mean(heights) if heights else 0)
+
+        return np.array(feature_vector)
+
+
     @app.route('/upload-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
@@ -82,7 +123,7 @@ def create_app():
         # buat nama file unik
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
         filename = f"{secure_filename(license_plate)}_{timestamp}.jpg"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER_IN'], filename)
 
         # simpan gambar
         image.save(filepath)
@@ -104,6 +145,7 @@ def create_app():
             'entry_image_path': filepath
         }), 200
 
+
     @app.route('/upload-exit', methods=['POST'])
     def upload_exit():
         if 'image' not in request.files:
@@ -112,6 +154,10 @@ def create_app():
         image = request.files['image']
         qr_code = request.form.get('qr_code')
 
+        print(type(image))
+        print(image.content_type)
+        print(image.filename)
+
         if not image or not qr_code:
             return jsonify({'error': 'Missing data'}), 400
 
@@ -119,6 +165,16 @@ def create_app():
         vehicle = Vehicle.query.filter_by(qr_code=qr_code).first()
         if not vehicle:
             return jsonify({'error': 'Vehicle not found'}), 404
+        
+        model = YOLO("yolov8.pt")  # atau model kamu
+
+        results1 = model(vehicle.entry_image_path)
+        # Baca sebagai bytes dan konversi ke np.array
+        img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
+        results2 = model(img)
+
+        features1 = extract_yolo_features(results1, model.names)
+        features2 = extract_yolo_features(results2, model.names)
 
         # Simpan gambar keluar
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
@@ -128,9 +184,10 @@ def create_app():
         filepath = os.path.join(output_folder, filename)
         image.save(filepath)
 
-        # (Opsional) Matching logic di sini
-        match_score = 1.0  # sementara hardcoded, nanti bisa pakai OpenCV
-        match_status = "matched"
+        # Matching logic
+        similarity = cosine_similarity([features1], [features2])[0][0]
+        match_score = round(float(similarity), 4)
+        match_status = "matched" if similarity >= 0.99 else "not_matched"
 
         # Simpan log keluar
         exit_log = VehicleExitLog(

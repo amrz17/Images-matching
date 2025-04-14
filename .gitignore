@@ -67,3 +67,9 @@ ENV/
 env/
 *.env
 
+# model
+.pt
+
+# images
+static/
+
