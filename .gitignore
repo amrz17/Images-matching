@@ -67,9 +67,13 @@ ENV/
 env/
 *.env
 
-# model
-.pt
+# Ignore model weight files
+best.pt
+best.pt:Zone.Identifier
+yolov8.pt
+yolov8.pt:Zone.Identifier
 
-# images
-static/
+# Ignore entire static folder
+/static/
+
 

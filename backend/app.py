@@ -6,6 +6,7 @@ from datetime import datetime
 from ultralytics import YOLO
 import os
 import cv2
+import easyocr
 from werkzeug.utils import secure_filename
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -107,18 +108,90 @@ def create_app():
 
         return np.array(feature_vector)
 
+    def convert_uploaded_file_to_cv2(image_file):
+        image = Image.open(image_file).convert("RGB")
+        return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
+    # Fungsi Pre-Processing untuk OCR
+    def preprocess_image(image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        denoised = cv2.GaussianBlur(binary, (5, 5), 0)
+        resized = cv2.resize(denoised, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        padded = cv2.copyMakeBorder(resized, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+        return padded
+
+    # Fungsi Koreksi OCR
+    def correct_ocr(text):
+        print(text)
+        return text.replace("7", "1")
+
+    def detect_license_plate_text(image_file, model_path):
+    
+        # Konversi file upload ke format OpenCV
+        image = convert_uploaded_file_to_cv2(image_file)
+
+        # Simpan ke file temporer agar YOLO bisa baca (YOLOv8 tidak bisa baca NumPy langsung)
+        temp_path = "/tmp/temp_uploaded.jpg"
+        cv2.imwrite(temp_path, image)
+
+        # Deteksi dengan YOLO
+        model = YOLO(model_path)
+        results = model(temp_path)
+
+        #reader = easyocr.Reader(["en", "id"])
+
+        # Tambahkan log untuk label deteksi
+        print("Detected objects:")
+        for result in results:
+            for box in result.boxes:
+                class_id = int(box.cls)
+                label = model.names[class_id]
+                print(f" - {label}")
+
+                if label.lower() == "plat nomor":
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    print(f"Cropping coordinates: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                    plate_image = image[y1:y2, x1:x2]
+                    preprocessed_image = preprocess_image(plate_image)
+
+                    reader = easyocr.Reader(["en", "id"])
+                    ocr_results = reader.readtext(preprocessed_image)
+                    print(f"OCR raw results: {ocr_results}")
+
+                    for detection in ocr_results:
+                        text = detection[1]  # detection[1] adalah string teks yang terbaca
+                        confidence = detection[2]             
+                        print(f"Detected text: {text}, confidence: {confidence}")
+
+                        if confidence >= 0.60:
+                            return correct_ocr(text)
+                    break
+
+        return None
     @app.route('/upload-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
             return jsonify({'error': 'No image uploaded'}), 400
 
         image = request.files['image']
-        license_plate = request.form.get('license_plate')
+        #license_plate = request.form.get('license_plate')
         vehicle_type = request.form.get('vehicle_type', 'mobil')  # default
+
+        #img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
+
+        license_plate = detect_license_plate_text(
+            image_file=image,
+            model_path="yolov8.pt"
+        )
+
+        print("License plate text:", license_plate)
 
         if not image or not license_plate:
             return jsonify({'error': 'Missing data'}), 400
+
 
         # buat nama file unik
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
@@ -141,6 +214,7 @@ def create_app():
 
         return jsonify({
             'message': 'Image and data saved successfully',
+            'license_plate': license_plate,
             'qr_code': qr_code_value,
             'entry_image_path': filepath
         }), 200
