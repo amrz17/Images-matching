@@ -11,11 +11,15 @@ from werkzeug.utils import secure_filename
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
-
+from datetime import datetime
+import pytz
 
 # Inisialisasi SQLAlchemy dan Marshmallow
 db = SQLAlchemy()
 ma = Marshmallow()
+
+def current_time_wib():
+    return datetime.now(pytz.timezone("Asia/Jakarta"))
 
 # MODELS
 class Vehicle(db.Model):
@@ -24,7 +28,7 @@ class Vehicle(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     license_plate = db.Column(db.String(20), nullable=False)
     vehicle_type = db.Column(db.String(50), nullable=True)
-    entry_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    entry_time = db.Column(db.DateTime, nullable=False, default=current_time_wib)
     entry_image_path = db.Column(db.String(255), nullable=False)
     qr_code = db.Column(db.String(100), nullable=False, unique=True)
     is_exit = db.Column(db.Boolean, nullable=False, default=False)
@@ -36,10 +40,10 @@ class VehicleExitLog(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
-    exit_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    exit_time = db.Column(db.DateTime, nullable=False, default=current_time_wib)
     exit_image_path = db.Column(db.String(255), nullable=False)
-    match_score = db.Column(db.Float, nullable=True)  # 0.0 - 1.0 atau 0 - 100
-    match_status = db.Column(db.String(20), nullable=False)  # matched, not_matched, manual_check
+    match_score = db.Column(db.Float, nullable=True)
+    match_status = db.Column(db.String(20), nullable=False)
 
 
 # APP SETUP 
@@ -117,9 +121,11 @@ def create_app():
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        binary = cv2.adaptiveThreshold(enhanced, 255, 
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 11, 2)
         denoised = cv2.GaussianBlur(binary, (5, 5), 0)
-        resized = cv2.resize(denoised, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        resized = cv2.resize(denoised, None, fx=3, fy=3, interpolation=cv2.INTER_LINEAR)
         padded = cv2.copyMakeBorder(resized, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
         return padded
 
@@ -143,13 +149,19 @@ def create_app():
 
         #reader = easyocr.Reader(["en", "id"])
 
+        # Inisialisasi dulu
+        detected_vehicle_label = None
+        detected_text = None
+
         # Tambahkan log untuk label deteksi
         print("Detected objects:")
         for result in results:
             for box in result.boxes:
                 class_id = int(box.cls)
                 label = model.names[class_id]
-                print(f" - {label}")
+                 # Simpan jenis kendaraan (class 0 atau 1)
+                if class_id in [0, 1] and detected_vehicle_label is None:
+                    detected_vehicle_label = label
 
                 if label.lower() == "plat nomor":
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -166,11 +178,13 @@ def create_app():
                         confidence = detection[2]             
                         print(f"Detected text: {text}, confidence: {confidence}")
 
-                        if confidence >= 0.60:
-                            return correct_ocr(text)
+                        if confidence >= 0.55:
+                            detected_text = correct_ocr(text)
+                            break
                     break
 
-        return None
+        return detected_vehicle_label, detected_text
+    
     @app.route('/upload-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
@@ -178,11 +192,11 @@ def create_app():
 
         image = request.files['image']
         #license_plate = request.form.get('license_plate')
-        vehicle_type = request.form.get('vehicle_type', 'mobil')  # default
+        #vehicle_type = request.form.get('vehicle_type', 'mobil')  # default
 
         #img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
 
-        license_plate = detect_license_plate_text(
+        vehicle_type, license_plate = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
@@ -232,6 +246,14 @@ def create_app():
         print(image.content_type)
         print(image.filename)
 
+        vehicle_type, license_plate = detect_license_plate_text(
+            image_file=image,
+            model_path="yolov8.pt"
+        )
+        
+        vehicle_type_exit = vehicle_type
+        license_plate_exit = license_plate
+
         if not image or not qr_code:
             return jsonify({'error': 'Missing data'}), 400
 
@@ -240,15 +262,27 @@ def create_app():
         if not vehicle:
             return jsonify({'error': 'Vehicle not found'}), 404
         
+        license_plate_entry = vehicle.license_plate
+        vehicle_type_entry = vehicle.vehicle_type
+        image_entry = vehicle.entry_image_path
+
+        # Lanjut ke proses image matching
         model = YOLO("yolov8.pt")  # atau model kamu
 
-        results1 = model(vehicle.entry_image_path)
-        # Baca sebagai bytes dan konversi ke np.array
+        results1 = model(image_entry)
         img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
         results2 = model(img)
 
         features1 = extract_yolo_features(results1, model.names)
         features2 = extract_yolo_features(results2, model.names)
+
+        # Bandingkan data masuk dan keluar
+        is_match = False
+        if license_plate_exit == license_plate_entry and vehicle_type_exit == vehicle_type_entry:
+            print("Cocok! Data kendaraan sesuai.")
+            is_match = True
+        else:
+            print("Data tidak cocok. Pemeriksaan manual dibutuhkan.")
 
         # Simpan gambar keluar
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
@@ -257,6 +291,11 @@ def create_app():
         os.makedirs(output_folder, exist_ok=True)
         filepath = os.path.join(output_folder, filename)
         image.save(filepath)
+
+        # Update exit_time jika match
+        if is_match:
+            vehicle.exit_time = datetime.now(pytz.timezone("Asia/Jakarta"))
+            db.session.commit()
 
         # Matching logic
         similarity = cosine_similarity([features1], [features2])[0][0]
@@ -276,14 +315,16 @@ def create_app():
         vehicle.is_exit = True
         db.session.commit()
 
+        # Kembalikan respons ke client
         return jsonify({
             'message': 'Exit data saved successfully',
             'license_plate': vehicle.license_plate,
             'exit_image_path': filepath,
             'match_score': match_score,
-            'match_status': match_status
+            'match_status': match_status,
+            'vehicle_match': is_match  # Tambahan info cocok/tidak
         }), 200
-    
+
     return app
 
 # MAIN
