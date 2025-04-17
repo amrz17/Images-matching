@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, Response, request
+from flask import Flask, jsonify, Response, request, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
@@ -13,6 +13,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
 from datetime import datetime
 import pytz
+import json
+
 
 # Inisialisasi SQLAlchemy dan Marshmallow
 db = SQLAlchemy()
@@ -30,6 +32,7 @@ class Vehicle(db.Model):
     vehicle_type = db.Column(db.String(50), nullable=True)
     entry_time = db.Column(db.DateTime, nullable=False, default=current_time_wib)
     entry_image_path = db.Column(db.String(255), nullable=False)
+    feature = db.Column(db.Text)
     qr_code = db.Column(db.String(100), nullable=False, unique=True)
     is_exit = db.Column(db.Boolean, nullable=False, default=False)
 
@@ -147,7 +150,7 @@ def create_app():
         model = YOLO(model_path)
         results = model(temp_path)
 
-        #reader = easyocr.Reader(["en", "id"])
+        features = extract_yolo_features(results, model.names)
 
         # Inisialisasi dulu
         detected_vehicle_label = None
@@ -183,7 +186,7 @@ def create_app():
                             break
                     break
 
-        return detected_vehicle_label, detected_text
+        return detected_vehicle_label, detected_text, features
     
     @app.route('/upload-entry', methods=['POST'])
     def upload_entry():
@@ -191,12 +194,8 @@ def create_app():
             return jsonify({'error': 'No image uploaded'}), 400
 
         image = request.files['image']
-        #license_plate = request.form.get('license_plate')
-        #vehicle_type = request.form.get('vehicle_type', 'mobil')  # default
 
-        #img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
-
-        vehicle_type, license_plate = detect_license_plate_text(
+        vehicle_type, license_plate, features = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
@@ -206,11 +205,12 @@ def create_app():
         if not image or not license_plate:
             return jsonify({'error': 'Missing data'}), 400
 
-
-        # buat nama file unik
+        # buat nama file
         timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
         filename = f"{secure_filename(license_plate)}_{timestamp}.jpg"
         filepath = os.path.join(app.config['UPLOAD_FOLDER_IN'], filename)
+        feature1 = json.dumps(features.tolist())
+        print(features)
 
         # simpan gambar
         image.save(filepath)
@@ -221,8 +221,9 @@ def create_app():
             license_plate=license_plate,
             vehicle_type=vehicle_type,
             entry_image_path=filepath,
-            qr_code=qr_code_value
-        )
+            qr_code=qr_code_value,
+            feature=feature1  # simpan vektor fitur YOLO
+            )
         db.session.add(vehicle)
         db.session.commit()
 
@@ -242,17 +243,14 @@ def create_app():
         image = request.files['image']
         qr_code = request.form.get('qr_code')
 
-        print(type(image))
-        print(image.content_type)
-        print(image.filename)
-
-        vehicle_type, license_plate = detect_license_plate_text(
+        vehicle_type, license_plate, features = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
         
         vehicle_type_exit = vehicle_type
         license_plate_exit = license_plate
+        features2 = features
 
         if not image or not qr_code:
             return jsonify({'error': 'Missing data'}), 400
@@ -264,19 +262,13 @@ def create_app():
         
         license_plate_entry = vehicle.license_plate
         vehicle_type_entry = vehicle.vehicle_type
-        image_entry = vehicle.entry_image_path
+        features1_str = vehicle.feature
 
-        # Lanjut ke proses image matching
-        model = YOLO("yolov8.pt")  # atau model kamu
+        features1 = np.array(json.loads(features1_str))  # bentuk array float
 
-        results1 = model(image_entry)
-        img = Image.open(image.stream).convert('RGB')  # jika pakai PIL
-        results2 = model(img)
+        features2 = features2
 
-        features1 = extract_yolo_features(results1, model.names)
-        features2 = extract_yolo_features(results2, model.names)
-
-        # Bandingkan data masuk dan keluar
+        # Cocokan Kendaraan masuk dan keluar
         is_match = False
         if license_plate_exit == license_plate_entry and vehicle_type_exit == vehicle_type_entry:
             print("Cocok! Data kendaraan sesuai.")
@@ -292,12 +284,7 @@ def create_app():
         filepath = os.path.join(output_folder, filename)
         image.save(filepath)
 
-        # Update exit_time jika match
-        if is_match:
-            vehicle.exit_time = datetime.now(pytz.timezone("Asia/Jakarta"))
-            db.session.commit()
-
-        # Matching logic
+        # Image Matching logic
         similarity = cosine_similarity([features1], [features2])[0][0]
         match_score = round(float(similarity), 4)
         match_status = "matched" if similarity >= 0.99 else "not_matched"
