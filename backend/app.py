@@ -14,7 +14,12 @@ from PIL import Image
 from datetime import datetime
 import pytz
 import json
+from dotenv import load_dotenv
 
+load_dotenv()  # Ini akan membaca file .env
+
+# Contoh ambil variabel
+database_url = os.getenv("SQLALCHEMY_DATABASE_URI")
 
 # Inisialisasi SQLAlchemy dan Marshmallow
 db = SQLAlchemy()
@@ -137,12 +142,13 @@ def create_app():
         print(text)
         return text.replace("7", "1")
 
+    # Fungsi OCR Plat Nomor
     def detect_license_plate_text(image_file, model_path):
     
         # Konversi file upload ke format OpenCV
         image = convert_uploaded_file_to_cv2(image_file)
 
-        # Simpan ke file temporer agar YOLO bisa baca (YOLOv8 tidak bisa baca NumPy langsung)
+        # Simpan ke file temporer agar YOLO bisa baca
         temp_path = "/tmp/temp_uploaded.jpg"
         cv2.imwrite(temp_path, image)
 
@@ -206,7 +212,7 @@ def create_app():
             return jsonify({'error': 'Missing data'}), 400
 
         # buat nama file
-        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
         filename = f"{secure_filename(license_plate)}_{timestamp}.jpg"
         filepath = os.path.join(app.config['UPLOAD_FOLDER_IN'], filename)
         feature1 = json.dumps(features.tolist())
@@ -277,7 +283,7 @@ def create_app():
             print("Data tidak cocok. Pemeriksaan manual dibutuhkan.")
 
         # Simpan gambar keluar
-        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
         filename = f"{secure_filename(vehicle.license_plate)}_exit_{timestamp}.jpg"
         output_folder = 'static/images/vehicles/keluar'
         os.makedirs(output_folder, exist_ok=True)
