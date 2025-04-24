@@ -15,6 +15,11 @@ from datetime import datetime
 import pytz
 import json
 from dotenv import load_dotenv
+import tempfile
+import requests
+import time
+import threading
+
 
 load_dotenv()  # Ini akan membaca file .env
 
@@ -53,14 +58,13 @@ class VehicleExitLog(db.Model):
     match_score = db.Column(db.Float, nullable=True)
     match_status = db.Column(db.String(20), nullable=False)
 
-
 # APP SETUP 
 def create_app():
     app = Flask(__name__)
     CORS(app, supports_credentials=True)
 
     # Konfigurasi koneksi PostgreSQL
-    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://postgres:admin123@localhost:5432/postgres"
+    app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Konfigurasi upload folder
@@ -77,9 +81,8 @@ def create_app():
     # Membuat tabel di database jika belum ada
     with app.app_context():
         db.create_all()
-
-    # ROUTES
-
+    
+            
     @app.route('/')
     def hello():
         return 'Hello, Flask di Ubuntu!'
@@ -124,19 +127,6 @@ def create_app():
         image = Image.open(image_file).convert("RGB")
         return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-    # Fungsi Pre-Processing untuk OCR
-    def preprocess_image(image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        binary = cv2.adaptiveThreshold(enhanced, 255, 
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY, 11, 2)
-        denoised = cv2.GaussianBlur(binary, (5, 5), 0)
-        resized = cv2.resize(denoised, None, fx=3, fy=3, interpolation=cv2.INTER_LINEAR)
-        padded = cv2.copyMakeBorder(resized, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-        return padded
-
     # Fungsi Koreksi OCR
     def correct_ocr(text):
         print(text)
@@ -144,55 +134,50 @@ def create_app():
 
     # Fungsi OCR Plat Nomor
     def detect_license_plate_text(image_file, model_path):
-    
         # Konversi file upload ke format OpenCV
         image = convert_uploaded_file_to_cv2(image_file)
 
         # Simpan ke file temporer agar YOLO bisa baca
-        temp_path = "/tmp/temp_uploaded.jpg"
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, "temp_uploaded.jpg")        
         cv2.imwrite(temp_path, image)
 
         # Deteksi dengan YOLO
         model = YOLO(model_path)
         results = model(temp_path)
 
-        features = extract_yolo_features(results, model.names)
-
-        # Inisialisasi dulu
-        detected_vehicle_label = None
         detected_text = None
 
-        # Tambahkan log untuk label deteksi
         print("Detected objects:")
         for result in results:
             for box in result.boxes:
-                class_id = int(box.cls)
-                label = model.names[class_id]
-                 # Simpan jenis kendaraan (class 0 atau 1)
-                if class_id in [0, 1] and detected_vehicle_label is None:
-                    detected_vehicle_label = label
+                class_id = int(box.cls[0])  # pastikan ambil nilai int dari tensor
+                label = model.names[class_id] if hasattr(model, "names") else "Unknown"
 
                 if label.lower() == "plat nomor":
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    coords = box.xyxy[0].cpu().numpy().astype(int)
+                    x1, y1, x2, y2 = coords
                     print(f"Cropping coordinates: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+
                     plate_image = image[y1:y2, x1:x2]
-                    preprocessed_image = preprocess_image(plate_image)
 
-                    reader = easyocr.Reader(["en", "id"])
-                    ocr_results = reader.readtext(preprocessed_image)
-                    print(f"OCR raw results: {ocr_results}")
+                    try:
+                        reader = easyocr.Reader(["en", "id"], gpu=False)
+                        ocr_results = reader.readtext(plate_image)
 
-                    for detection in ocr_results:
-                        text = detection[1]  # detection[1] adalah string teks yang terbaca
-                        confidence = detection[2]             
-                        print(f"Detected text: {text}, confidence: {confidence}")
+                        for detection in ocr_results:
+                            text = detection[1]
+                            confidence = detection[2]
+                            print(f"Detected text: {text}, confidence: {confidence}")
 
-                        if confidence >= 0.55:
-                            detected_text = correct_ocr(text)
-                            break
+                            if confidence >= 0.55:
+                                detected_text = correct_ocr(text) if 'correct_ocr' in globals() else text
+                                break
+                    except Exception as e:
+                        print(f"OCR processing failed: {e}")
                     break
 
-        return detected_vehicle_label, detected_text, features
+        return detected_text
     
     @app.route('/upload-entry', methods=['POST'])
     def upload_entry():
@@ -200,8 +185,11 @@ def create_app():
             return jsonify({'error': 'No image uploaded'}), 400
 
         image = request.files['image']
+        feature = request.form.get('feature')
+        vehicle_type = request.form.get('vehicle_type')
+        local_save_path = request.form.get('entry_image_path')
 
-        vehicle_type, license_plate, features = detect_license_plate_text(
+        license_plate  = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
@@ -211,24 +199,17 @@ def create_app():
         if not image or not license_plate:
             return jsonify({'error': 'Missing data'}), 400
 
-        # buat nama file
+         # buat nama file
         timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
-        filename = f"{secure_filename(license_plate)}_{timestamp}.jpg"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER_IN'], filename)
-        feature1 = json.dumps(features.tolist())
-        print(features)
-
-        # simpan gambar
-        image.save(filepath)
 
         # simpan ke database
         qr_code_value = f"{license_plate}_{timestamp}"
         vehicle = Vehicle(
             license_plate=license_plate,
             vehicle_type=vehicle_type,
-            entry_image_path=filepath,
+            entry_image_path=local_save_path,
             qr_code=qr_code_value,
-            feature=feature1  # simpan vektor fitur YOLO
+            feature=feature  # simpan vektor fitur YOLO
             )
         db.session.add(vehicle)
         db.session.commit()
@@ -237,7 +218,7 @@ def create_app():
             'message': 'Image and data saved successfully',
             'license_plate': license_plate,
             'qr_code': qr_code_value,
-            'entry_image_path': filepath
+            'entry_image_path': local_save_path
         }), 200
 
 
@@ -248,15 +229,18 @@ def create_app():
 
         image = request.files['image']
         qr_code = request.form.get('qr_code')
+        feature = request.form.get('feature')
+        vehicle_type = request.form.get('vehicle_type')
 
-        vehicle_type, license_plate, features = detect_license_plate_text(
+        license_plate = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
         
         vehicle_type_exit = vehicle_type
+        vehicle_type_exit  = json.loads(vehicle_type_exit)
         license_plate_exit = license_plate
-        features2 = features
+        features2 = feature
 
         if not image or not qr_code:
             return jsonify({'error': 'Missing data'}), 400
@@ -269,10 +253,21 @@ def create_app():
         license_plate_entry = vehicle.license_plate
         vehicle_type_entry = vehicle.vehicle_type
         features1_str = vehicle.feature
+        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}  # Mapping label ke indeks
+
+        print("vehicle_type_entry:", vehicle_type_entry)
+        print("tipe tiap elemen:", [type(v) for v in vehicle_type_entry])
+        vehicle_type_entry = json.loads(vehicle_type_entry)
+
+
+        labels_entry_numeric = [label_map[label] for label in vehicle_type_entry]
+        labels_exit_numeric = [label_map[label] for label in vehicle_type_exit]
+
 
         features1 = np.array(json.loads(features1_str))  # bentuk array float
+        features2 = np.array(json.loads(features2))  # bentuk array float
 
-        features2 = features2
+        # features2 = features2
 
         # Cocokan Kendaraan masuk dan keluar
         is_match = False
@@ -285,15 +280,23 @@ def create_app():
         # Simpan gambar keluar
         timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
         filename = f"{secure_filename(vehicle.license_plate)}_exit_{timestamp}.jpg"
-        output_folder = 'static/images/vehicles/keluar'
-        os.makedirs(output_folder, exist_ok=True)
+        output_folder = 'vehicle_detections/vehicle_exit'
         filepath = os.path.join(output_folder, filename)
-        image.save(filepath)
 
         # Image Matching logic
+        # Gabungkan koordinat bounding box dan label numerik sebagai fitur
+        features1 = np.hstack([features1_str.flatten(), labels_entry_numeric])
+
+        features2 = np.hstack([features2.flatten(), labels_exit_numeric[:len(features2)]])  # Ambil sesuai jumlah boxes
+
+        # Hitung cosine similarity
         similarity = cosine_similarity([features1], [features2])[0][0]
-        match_score = round(float(similarity), 4)
-        match_status = "matched" if similarity >= 0.99 else "not_matched"
+
+        # Bulatkan skor similarity
+        match_score = round(float(similarity), 3)
+
+        # Tentukan status kecocokan
+        match_status = "matched" if match_score >= 0.9 else "not_matched"
 
         # Simpan log keluar
         exit_log = VehicleExitLog(
