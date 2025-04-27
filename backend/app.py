@@ -19,6 +19,8 @@ import tempfile
 import requests
 import time
 import threading
+import subprocess  # Tambahkan ini untuk menjalankan file python lain
+
 
 
 load_dotenv()  # Ini akan membaca file .env
@@ -224,25 +226,10 @@ def create_app():
 
     @app.route('/upload-exit', methods=['POST'])
     def upload_exit():
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image uploaded'}), 400
 
-        image = request.files['image']
         qr_code = request.form.get('qr_code')
-        feature = request.form.get('feature')
-        vehicle_type = request.form.get('vehicle_type')
 
-        license_plate = detect_license_plate_text(
-            image_file=image,
-            model_path="yolov8.pt"
-        )
-        
-        vehicle_type_exit = vehicle_type
-        vehicle_type_exit  = json.loads(vehicle_type_exit)
-        license_plate_exit = license_plate
-        features2 = feature
-
-        if not image or not qr_code:
+        if not qr_code:
             return jsonify({'error': 'Missing data'}), 400
 
         # Cari kendaraan berdasarkan QR code
@@ -250,19 +237,44 @@ def create_app():
         if not vehicle:
             return jsonify({'error': 'Vehicle not found'}), 404
         
+        # Step 2: QR code ditemukan, jalankan exit_cam.py
+        try:
+            result = subprocess.run(['python', 'exit_cam.py'], check=True, capture_output=True, text=True)
+            print('exit_cam.py output:', result.stdout)
+        except subprocess.CalledProcessError as e:
+            return jsonify({'error': f'Failed to run exit_cam.py: {e.stderr}'}), 500
+
+        if not image:
+            return jsonify({'error': 'Missing image'}), 400
+
+        image = request.files['image']
+        feature = request.form.get('feature')
+        vehicle_type = request.form.get('vehicle_type')
+        local_save_path = request.form.get('exit_image_path')
+        
+        license_plate = detect_license_plate_text(
+            image_file=image,
+            model_path="yolov8.pt"
+        )
+        
+        # Exit Data Vehicle
+        vehicle_type_exit = vehicle_type
+        vehicle_type_exit  = json.loads(vehicle_type_exit)
+        license_plate_exit = license_plate
+        features2 = feature
+        
+        # Entry Data Vehicle
         license_plate_entry = vehicle.license_plate
         vehicle_type_entry = vehicle.vehicle_type
         features1_str = vehicle.feature
-        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}  # Mapping label ke indeks
-
-        print("vehicle_type_entry:", vehicle_type_entry)
-        print("tipe tiap elemen:", [type(v) for v in vehicle_type_entry])
+        # print("vehicle_type_entry:", vehicle_type_entry)
+        # print("tipe tiap elemen:", [type(v) for v in vehicle_type_entry])
         vehicle_type_entry = json.loads(vehicle_type_entry)
 
-
+        # Mapping label ke angka
+        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}  # Mapping label ke indeks
         labels_entry_numeric = [label_map[label] for label in vehicle_type_entry]
         labels_exit_numeric = [label_map[label] for label in vehicle_type_exit]
-
 
         features1 = np.array(json.loads(features1_str))  # bentuk array float
         features2 = np.array(json.loads(features2))  # bentuk array float
@@ -277,16 +289,10 @@ def create_app():
         else:
             print("Data tidak cocok. Pemeriksaan manual dibutuhkan.")
 
-        # Simpan gambar keluar
-        timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
-        filename = f"{secure_filename(vehicle.license_plate)}_exit_{timestamp}.jpg"
-        output_folder = 'vehicle_detections/vehicle_exit'
-        filepath = os.path.join(output_folder, filename)
 
         # Image Matching logic
-        # Gabungkan koordinat bounding box dan label numerik sebagai fitur
+        # Gabungkan fitur + label
         features1 = np.hstack([features1_str.flatten(), labels_entry_numeric])
-
         features2 = np.hstack([features2.flatten(), labels_exit_numeric[:len(features2)]])  # Ambil sesuai jumlah boxes
 
         # Hitung cosine similarity
@@ -301,7 +307,7 @@ def create_app():
         # Simpan log keluar
         exit_log = VehicleExitLog(
             vehicle_id=vehicle.id,
-            exit_image_path=filepath,
+            exit_image_path=local_save_path,
             match_score=match_score,
             match_status=match_status
         )
@@ -315,7 +321,7 @@ def create_app():
         return jsonify({
             'message': 'Exit data saved successfully',
             'license_plate': vehicle.license_plate,
-            'exit_image_path': filepath,
+            'exit_image_path': local_save_path,
             'match_score': match_score,
             'match_status': match_status,
             'vehicle_match': is_match  # Tambahan info cocok/tidak

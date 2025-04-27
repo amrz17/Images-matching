@@ -5,7 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from ultralytics import YOLO
 import json
-import pytz
+
 
 # Load .env
 load_dotenv()
@@ -42,49 +42,45 @@ annotated_frame = results[0].plot()
 
 def get_detected_objects_array(boxes1, class_ids, scores1):
     labels_map = {
-        0: "motor",
-        1: "mobil",
-        2: "plat"
+        0: "Mobil",
+        1: "Motor",
+        2: "Plat Nomor"
     }
 
-    results = []
-    label = []
-    for i, box in enumerate(boxes1): 
-        class_id = float(class_ids[i])
-        label = labels_map.get(class_id, "unknown")
-        score = float(scores1[i])
-        x, y, w, h = map(float, box)
+    features = []
 
-        # Hitung x2 dan y2 dari w dan h
+    for i, box in enumerate(boxes1):
+        class_idx = int(class_ids[i])
+        label = labels_map.get(class_idx, "Unknown")
+        confidence = float(scores1[i])
+        
+        x, y, w, h = map(float, box)
         x2 = x + w
         y2 = y + h
 
-        result = [class_id, score, x, y, w, h, x2, y2]
-        results.append(result)
+        print(f"Object: {label} - Confidence: {confidence:.2f}")
+        print(f"Bounding Box (x1, y1, x2, y2): {x}, {y}, {x2}, {y2}")
 
-        if class_id in [0, 1, 2]:  # motor dan mobil
-            label.append(label)
+        features.append([x, y, x2, y2])
 
-    return results, label
+    return features, label
+
 
 feature, label = get_detected_objects_array(boxes1, class_ids, scores1)
-print("feature = ", feature)
-print("labels = ", label)
 
-feature_json = json.dumps(feature, indent=2)
-#label = label[0]
+feature = json.dumps(feature)
+label = label[:5]
 
-print('feature', feature_json)
-
+print("Label", label)
+print("feature", feature)
 # Tampilkan annotated frame ke layar
 cv2.imshow("Deteksi Kamera", annotated_frame)
 cv2.waitKey(1000)
 
 # Simpan frame asli (tanpa bounding box)
-timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 image_filename = "original_image.jpg"
-local_save_path = os.path.join(save_dir, f"original_{timestamp}.jpg")
-
+local_save_path = os.path.join(save_dir, f"{label}_{timestamp}.jpg")
 
 cv2.imwrite(image_filename, frame)         # untuk dikirim ke API
 cv2.imwrite(local_save_path, frame)        # simpan ke penyimpanan lokal
@@ -96,10 +92,11 @@ if (0 in class_ids and 2 in class_ids) or (1 in class_ids and 2 in class_ids):
         with open(image_filename, 'rb') as img_file:
             files = {'image': img_file}
             data = {
-                'feature': feature_json,
-                'vehicle_type': label
+                'feature': feature,
+                'vehicle_type': label,
+                'entry_image_path': local_save_path
             }
-            response = requests.post("http://localhost:5000/upload-entry", files=files, data=data)
+            response = requests.post("http://localhost:5000/upload-exit", files=files, data=data)
             print(f"[+] API Response: {response.status_code}")
     except requests.exceptions.RequestException as e:
         print(f"[!] Gagal mengirim ke API: {e}")
