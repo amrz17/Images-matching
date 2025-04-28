@@ -12,7 +12,8 @@ function Header() {
 const styles = {
   header: {
     // backgroundColor: '#4CAF50',
-    backgroundColor: '#888',
+    //backgroundColor: '#888',
+    backgroundColor: '#D9D9D9',
     padding: '20px 20px',
     display: 'flex',
     justifyContent: 'space-between',

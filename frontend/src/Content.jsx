@@ -1,3 +1,5 @@
+import TextInput from "./TextInput";
+
 function Content() {
     return (
       <div style={styles.container}>
@@ -10,14 +12,36 @@ function Content() {
             </div>
         </div>
 
-        <div>
-            <h2>
+        
+        <div style={{ marginTop: '12rem'}}>
+            <img src="/scanner.svg" width={90}/>
+            <h1>
                 SCAN <br /> 
-                Your <br />
+                YOUR <br />
                 TICKET <br /> 
                 ON SCANNER
+            </h1>
+            <TextInput />
+        </div>
+
+        <div style={styles.match}>
+            <img src="/correct.svg" width={160}/>
+            <h2 style={{textAlign: 'center', color: '#63e6be', fontSize: '40px',
+                margin: '0px'
+             }}>
+                Match
             </h2>
-            <img src="../public/scanner.svg" width={90}/>
+        </div>
+
+        <div style={styles.notMatch}>
+            <img src="/wrong.svg" width={160}/>
+            <h2 style={{textAlign: 'center', color: '#EA0E0E', fontSize: '40px',
+                margin: '0px'
+             }}>
+                NOT <br />
+                MATCH
+            </h2>
+
         </div>
 
         <div style={styles.photoContainer}>
@@ -40,7 +64,7 @@ const styles = {
         justifyContent: 'center',
         alignItems: 'center',
         width: '100%',
-        gap: '24px'
+        gap: '20px'
     },
 
     photoContainer: {
@@ -49,18 +73,27 @@ const styles = {
     },
 
     photoBox: {
-        backgroundColor: '#888',
+        // backgroundColor: '#888',
+        backgroundColor: '#D9D9D9',
         margin: '12px',
         width: '360px',
         height: '400px'
     },
     plateNumber: {
-        backgroundColor: '#888',
+        // backgroundColor: '#888',
+        backgroundColor: '#D9D9D9',
         width: '360px',
         height: '50px',
         margin: '0 auto'
     },
-
+    match: {
+        marginTop: '140px',     
+        display: 'none'
+    },
+    notMatch: {
+        marginTop: '140px',     
+        display: 'none'
+    }
 }
 
 export default Content;
