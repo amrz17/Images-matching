@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 
+// const [response, setResponse] = useState('');
+// const [imagePath, setImagePath] = useState('');
+
 function TextInputEnter() {
+  const [licensePlate, setLicensePlate] = useState('');
+  const [matchStatus, setMatchStatus] = useState('');
+
   const [text, setText] = useState('');
   const [response, setResponse] = useState('');
 
@@ -20,8 +26,15 @@ function TextInputEnter() {
         });
 
         const data = await res.json();
-        setResponse(data.message || 'Berhasil!');
-        setText(''); // Hapus input setelah kirim
+         if (res.ok) {
+          setResponse(data.message || 'Berhasil!');
+          setLicensePlate(data.license_plate || '');
+          // setImagePath(data.exit_image_path || '');
+          setMatchStatus(data.match_status || '');
+          setText(''); // Hapus input setelah kirim
+        } else {
+          setResponse(data.error || 'Terjadi kesalahan.');
+        }
       } catch (error) {
         console.error('Error mengirim ke API:', error);
         setResponse('Gagal mengirim.');
@@ -40,6 +53,14 @@ function TextInputEnter() {
       />
 
       <p className="mt-4">{response}</p>
+      {licensePlate && (
+          <ExitResult
+            licensePlate={licensePlate}
+            matchStatus={matchStatus}
+            // imagePath={imagePath}
+            response={response}
+          />
+        )}
     </div>
   );
 }

@@ -181,7 +181,7 @@ def create_app():
 
         return detected_text
     
-    @app.route('/upload-entry', methods=['POST'])
+    @app.route('/vehicle-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
             return jsonify({'error': 'No image uploaded'}), 400
@@ -224,7 +224,7 @@ def create_app():
         }), 200
 
 
-    @app.route('/upload-exit', methods=['POST'])
+    @app.route('/vehicle-exit', methods=['POST'])
     def upload_exit():
 
         qr_code = request.form.get('qr_code')
@@ -238,43 +238,67 @@ def create_app():
             return jsonify({'error': 'Vehicle not found'}), 404
         
         # Step 2: QR code ditemukan, jalankan exit_cam.py
-        try:
-            result = subprocess.run(['python', 'exit_cam.py'], check=True, capture_output=True, text=True)
-            print('exit_cam.py output:', result.stdout)
-        except subprocess.CalledProcessError as e:
-            return jsonify({'error': f'Failed to run exit_cam.py: {e.stderr}'}), 500
-
-        if not image:
-            return jsonify({'error': 'Missing image'}), 400
+        # try:
+        #     result = subprocess.run(['python', 'exit_cam.py'], check=True, capture_output=True, text=True)
+        #     print('exit_cam.py output:', result.stdout)
+        # except subprocess.CalledProcessError as e:
+        #     return jsonify({'error': f'Failed to run exit_cam.py: {e.stderr}'}), 500
 
         image = request.files['image']
         feature = request.form.get('feature')
         vehicle_type = request.form.get('vehicle_type')
         local_save_path = request.form.get('exit_image_path')
         
+        if not image:
+            return jsonify({'error': 'Missing image'}), 400
+        
         license_plate = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
         
+        import json
+
+        # Mapping singkatan ke label lengkap
+        type_aliases = {'M': 'Motor', 'MB': 'Mobil', 'P': 'Plat Nomor'}
+
         # Exit Data Vehicle
-        vehicle_type_exit = vehicle_type
-        vehicle_type_exit  = json.loads(vehicle_type_exit)
+        vehicle_type_exit = vehicle_type  # Bisa berupa string atau list JSON
+        if isinstance(vehicle_type_exit, str):
+            try:
+                vehicle_type_exit = json.loads(vehicle_type_exit)
+            except json.JSONDecodeError:
+                vehicle_type_exit = [vehicle_type_exit]  # Jika hanya satu label, bungkus jadi list
+
+        # Konversi singkatan ke label lengkap
+        vehicle_type_exit = [type_aliases.get(v, v) for v in vehicle_type_exit]
         license_plate_exit = license_plate
         features2 = feature
-        
+
         # Entry Data Vehicle
         license_plate_entry = vehicle.license_plate
-        vehicle_type_entry = vehicle.vehicle_type
+        vehicle_type_entry = vehicle.vehicle_type  # Berformat string JSON
         features1_str = vehicle.feature
-        # print("vehicle_type_entry:", vehicle_type_entry)
-        # print("tipe tiap elemen:", [type(v) for v in vehicle_type_entry])
-        vehicle_type_entry = json.loads(vehicle_type_entry)
+        print("vehicle_type_entry (raw):", vehicle_type_entry)
+
+        # Decode JSON string
+        try:
+            vehicle_type_entry = json.loads(vehicle_type_entry)
+        except json.JSONDecodeError:
+            vehicle_type_entry = [vehicle_type_entry]
+
+        # Konversi singkatan ke label lengkap
+        vehicle_type_entry = [type_aliases.get(v, v) for v in vehicle_type_entry]
 
         # Mapping label ke angka
-        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}  # Mapping label ke indeks
-        labels_entry_numeric = [label_map[label] for label in vehicle_type_entry]
-        labels_exit_numeric = [label_map[label] for label in vehicle_type_exit]
+        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}
+
+        try:
+            labels_entry_numeric = [label_map[label] for label in vehicle_type_entry]
+            labels_exit_numeric = [label_map[label] for label in vehicle_type_exit]
+        except KeyError as e:
+            print(f"[ERROR] Label tidak ditemukan dalam label_map: {e}")
+            labels_entry_numeric, labels_exit_numeric = [], []  # Atau lakukan penanganan lain
 
         features1 = np.array(json.loads(features1_str))  # bentuk array float
         features2 = np.array(json.loads(features2))  # bentuk array float
@@ -292,11 +316,39 @@ def create_app():
 
         # Image Matching logic
         # Gabungkan fitur + label
-        features1 = np.hstack([features1_str.flatten(), labels_entry_numeric])
-        features2 = np.hstack([features2.flatten(), labels_exit_numeric[:len(features2)]])  # Ambil sesuai jumlah boxes
+        # features1 = np.hstack([features1_str.flatten(), labels_entry_numeric])
+        # features2 = np.hstack([features2.flatten(), labels_exit_numeric[:len(features2)]])  # Ambil sesuai jumlah boxes
+        try:
+            features1_str = json.loads(features1_str)
+        except json.JSONDecodeError:
+            print("[ERROR] Gagal parse JSON dari features1_str")
+            features1_str = []
+
+                # Pastikan features1_str dan features2 adalah numpy array
+        features1_array = np.array(features1_str, dtype=np.float32)
+        features2_array = np.array(features2, dtype=np.float32)
+
+        # Flatten fitur
+        features1_flat = features1_array.flatten()
+        features2_flat = features2_array.flatten()
+
+        # Validasi dan pemotongan label agar sesuai jumlah box (kalau perlu)
+        labels_entry_numeric = np.array(labels_entry_numeric, dtype=np.float32)
+        labels_exit_numeric = np.array(labels_exit_numeric, dtype=np.float32)
+
+        # Sesuaikan panjang label dengan panjang fitur
+        num_boxes_entry = len(features1_flat)   
+        num_boxes_exit = len(features2_flat)
+
+        labels_entry_trimmed = labels_entry_numeric[:num_boxes_entry]
+        labels_exit_trimmed = labels_exit_numeric[:num_boxes_exit]
+
+        # Gabungkan fitur + label
+        features1_combined = np.hstack([features1_flat, labels_entry_trimmed])
+        features2_combined = np.hstack([features2_flat, labels_exit_trimmed])
 
         # Hitung cosine similarity
-        similarity = cosine_similarity([features1], [features2])[0][0]
+        similarity = cosine_similarity([features1_combined], [features2_combined])[0][0]
 
         # Bulatkan skor similarity
         match_score = round(float(similarity), 3)

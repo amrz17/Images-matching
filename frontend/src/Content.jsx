@@ -1,14 +1,15 @@
 import TextInput from "./TextInput";
 
-function Content() {
+
+function Content({ licensePlate, matchStatus}) {
     return (
       <div style={styles.container}>
         <div style={styles.photoContainer}>
             <div style={styles.photoBox}>
-
+                <img src="" />
             </div>
             <div style={styles.plateNumber}>
-
+                <h2>{licensePlate}</h2>
             </div>
         </div>
 
@@ -24,7 +25,7 @@ function Content() {
             <TextInput />
         </div>
 
-        <div style={styles.match}>
+        {/* <div style={styles.match}>
             <img src="/correct.svg" width={160}/>
             <h2 style={{textAlign: 'center', color: '#63e6be', fontSize: '40px',
                 margin: '0px'
@@ -42,13 +43,34 @@ function Content() {
                 MATCH
             </h2>
 
-        </div>
+        </div> */}
+        {matchStatus && (
+            <div style={matchStatus === 'matched' ? styles.match : styles.notMatch}>
+                <img
+                src={matchStatus === 'matched' ? '/correct.svg' : '/wrong.svg'}
+                width={160}
+                alt={matchStatus === 'matched' ? 'Match' : 'Not Match'}
+                />
+                <h2
+                style={{
+                    textAlign: 'center',
+                    color: matchStatus === 'matched' ? '#63e6be' : '#EA0E0E',
+                    fontSize: '40px',
+                    margin: '0px',
+                }}
+                >
+                {matchStatus === 'matched' ? 'MATCH' : <>NOT<br />MATCH</>}
+                </h2>
+            </div>
+            )}
+
 
         <div style={styles.photoContainer}>
             <div style={styles.photoBox}>
 
             </div>
             <div style={styles.plateNumber}>
+                <h2>{licensePlate}</h2>
 
             </div>
         </div>
