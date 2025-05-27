@@ -65,17 +65,12 @@ def get_detected_objects_array(boxes1, class_ids, scores1):
         features.append([x, y, x2, y2])
         detected_labels.append(label)
 
-
     return features, detected_labels 
-
 
 feature, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
 
 feature = json.dumps(feature)
-# label = label[:5]
-
 vehicle_types_json = json.dumps(detected_labels)
-# label = json.dumps(label)
 
 print("Label", vehicle_types_json)
 print("feature", feature)

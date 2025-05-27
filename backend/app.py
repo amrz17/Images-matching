@@ -24,6 +24,10 @@ import subprocess  # Tambahkan ini untuk menjalankan file python lain
 
 
 load_dotenv()  # Ini akan membaca file .env
+camera_ip = os.getenv("CAMERA_IP")
+
+# Load model YOLO sekali saja saat startup
+model = YOLO("yolov8.pt")
 
 # Contoh ambil variabel
 database_url = os.getenv("SQLALCHEMY_DATABASE_URI")
@@ -69,12 +73,9 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Konfigurasi upload folder
-    app.config['UPLOAD_FOLDER_IN'] = 'static/images/vehicles/masuk'
-    os.makedirs(app.config['UPLOAD_FOLDER_IN'], exist_ok=True)
-
-    app.config['UPLOAD_FOLDER'] = 'static/images/vehicles/keluar'
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    # Buat folder untuk simpan hasil frame kendaraan keluar
+    save_dir = "vehicle_detections/vehicle_exit"
+    os.makedirs(save_dir, exist_ok=True)
 
     # Inisialisasi database dan Marshmallow
     db.init_app(app)
@@ -89,41 +90,30 @@ def create_app():
     def hello():
         return 'Hello, Flask di Ubuntu!'
 
-    def extract_yolo_features(result, model_labels):
-        detections = result[0].boxes
-        boxes = detections.xywh.cpu().numpy()
-        scores = detections.conf.cpu().numpy()
-        classes = detections.cls.cpu().numpy().astype(int)
+    def get_detected_objects_array(boxes1, class_ids, scores1):
+        labels_map = {
+            0: "Mobil",
+            1: "Motor",
+            2: "Plat Nomor"
+        }
+        features = []
+        detected_labels = []
+        for i, box in enumerate(boxes1):
+            class_idx = int(class_ids[i])
+            label = labels_map.get(class_idx, "Unknown")
+            confidence = float(scores1[i])
 
-        label_counts = {label: 0 for label in model_labels.values()}
-        confidence_per_label = {label: [] for label in model_labels.values()}
+            x, y, w, h = map(float, box)
+            x2 = x + w
+            y2 = y + h
 
-        widths = []
-        heights = []
+            print(f"Object: {label} - Confidence: {confidence:.2f}")
+            print(f"Bounding Box (x1, y1, x2, y2): {x}, {y}, {x2}, {y2}")
 
-        for i, box in enumerate(boxes):
-            class_idx = classes[i]
-            label = model_labels[class_idx]
-            confidence = scores[i]
+            features.append([x, y, x2, y2])
+            detected_labels.append(label)
 
-            label_counts[label] += 1
-            confidence_per_label[label].append(confidence)
-
-            widths.append(box[2])
-            heights.append(box[3])
-
-        # Buat vektor fitur
-        feature_vector = []
-        for label in model_labels.values():
-            feature_vector.append(label_counts[label])
-            avg_conf = np.mean(confidence_per_label[label]) if confidence_per_label[label] else 0
-            feature_vector.append(avg_conf)
-
-        # Tambahkan ukuran rata-rata bbox
-        feature_vector.append(np.mean(widths) if widths else 0)
-        feature_vector.append(np.mean(heights) if heights else 0)
-
-        return np.array(feature_vector)
+        return features, detected_labels
 
     def convert_uploaded_file_to_cv2(image_file):
         image = Image.open(image_file).convert("RGB")
@@ -223,7 +213,79 @@ def create_app():
             'entry_image_path': local_save_path
         }), 200
 
+    # Endpoint untuk menerima dan langsung memberikan QR code (tanpa menyimpan)
+    @app.route('/get-latest-qr', methods=['POST'])
+    def get_latest_qr():
+        data = request.get_json()
+        qr_code = data.get("qr_code")
 
+        if not qr_code:
+            return jsonify({"error": "qr_code tidak ditemukan"}), 400
+
+        # Mulai proses deteksi
+        cap = cv2.VideoCapture(camera_ip)
+        if not cap.isOpened():
+            return jsonify({"error": "Gagal membuka kamera"}), 500
+
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            return jsonify({"error": "Gagal membaca frame"}), 500
+
+        results = model.predict(frame)
+        boxes = results[0].boxes
+        boxes1 = boxes.xywh.cpu().numpy()
+        scores1 = boxes.conf.cpu().numpy()
+        class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
+        labels = model.names
+        annotated_frame = results[0].plot()
+
+        features, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
+        features_json = json.dumps(features)
+        vehicle_types_json = json.dumps(detected_labels)
+
+        primary_label = "Unknown"
+        for label in detected_labels:
+            if label in ["Mobil", "Motor"]:
+                primary_label = label
+                break
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_filename = "original_image.jpg"
+        local_save_path = os.path.join(save_dir, f"{primary_label}_{timestamp}.jpg")
+        annotated_filename = os.path.join(save_dir, f"{primary_label}_{timestamp}_annotated.jpg")
+
+        cv2.imwrite(image_filename, frame)
+        cv2.imwrite(local_save_path, frame)
+        cv2.imwrite(annotated_filename, annotated_frame)
+
+        if (0 in class_ids and 2 in class_ids) or (1 in class_ids and 2 in class_ids):
+            try:
+                with open(image_filename, 'rb') as img_file:
+                    files = {'image': ('image.jpg', img_file, 'image/jpeg')}
+                    data = {
+                        'qr_code': qr_code,
+                        'feature': features_json,
+                        'vehicle_type': vehicle_types_json,
+                        'exit_image_path': local_save_path
+                    }
+                    response = requests.post("http://localhost:5000/vehicle-exit", files=files, data=data)
+
+                    if response.status_code == 200:
+                        return jsonify(response.json()), 200
+                    else:
+                        return jsonify({"error": response.text}), response.status_code
+
+            except requests.exceptions.RequestException as e:
+                return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"message": "Kombinasi class tidak sesuai"}), 200
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+    # Endpoint untuk menerima citra kendaraan keluar dan untuk
+    # menjalankan fungsi pencocokan kendaraan masuk dan keluar
     @app.route('/vehicle-exit', methods=['POST'])
     def upload_exit():
 
@@ -257,8 +319,6 @@ def create_app():
             model_path="yolov8.pt"
         )
         
-        import json
-
         # Mapping singkatan ke label lengkap
         type_aliases = {'M': 'Motor', 'MB': 'Mobil', 'P': 'Plat Nomor'}
 
@@ -316,16 +376,16 @@ def create_app():
 
         # Image Matching logic
         # Gabungkan fitur + label
-        # features1 = np.hstack([features1_str.flatten(), labels_entry_numeric])
-        # features2 = np.hstack([features2.flatten(), labels_exit_numeric[:len(features2)]])  # Ambil sesuai jumlah boxes
         try:
-            features1_str = json.loads(features1_str)
+            # features1 = json.loads(features1)
+            features1 = features1.tolist()  # Convert numpy array to list
+            # features1 = json.dumps(features1)  # Then convert to JSON stringk
         except json.JSONDecodeError:
             print("[ERROR] Gagal parse JSON dari features1_str")
-            features1_str = []
+            features1 = []
 
                 # Pastikan features1_str dan features2 adalah numpy array
-        features1_array = np.array(features1_str, dtype=np.float32)
+        features1_array = np.array(features1, dtype=np.float32)
         features2_array = np.array(features2, dtype=np.float32)
 
         # Flatten fitur
@@ -355,6 +415,7 @@ def create_app():
 
         # Tentukan status kecocokan
         match_status = "matched" if match_score >= 0.9 else "not_matched"
+        print(f"Data {match_status}")
 
         # Simpan log keluar
         exit_log = VehicleExitLog(
