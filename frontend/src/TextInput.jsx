@@ -17,7 +17,7 @@ function TextInputEnter() {
   const handleKeyDown = async (e) => {
     if (e.key === 'Enter') {
       try {
-        const res = await fetch('http://localhost:5000/upload-exit', {
+        const res = await fetch('http://localhost:5000/get-latest-qr', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

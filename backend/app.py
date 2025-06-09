@@ -20,7 +20,9 @@ import requests
 import time
 import threading
 import subprocess  # Tambahkan ini untuk menjalankan file python lain
-
+# import qrcode
+import base64
+from io import BytesIO
 
 
 load_dotenv()  # Ini akan membaca file .env
@@ -75,6 +77,7 @@ def create_app():
 
     # Buat folder untuk simpan hasil frame kendaraan keluar
     save_dir = "vehicle_detections/vehicle_exit"
+    save_dir_qr = "vehicle_detections/qr_code"
     os.makedirs(save_dir, exist_ok=True)
 
     # Inisialisasi database dan Marshmallow
@@ -188,14 +191,30 @@ def create_app():
 
         print("License plate text:", license_plate)
 
-        if not image or not license_plate:
-            return jsonify({'error': 'Missing data'}), 400
+        # if not image or not license_plate:
+        #     return jsonify({'error': 'Missing data'}), 400
 
          # buat nama file
         timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
 
         # simpan ke database
         qr_code_value = f"{license_plate}_{timestamp}"
+        # qr = qrcode.QRCode(
+        #     version=1,
+        #     error_correction=qrcode.constants.ERROR_CORRECT_L,
+        #     box_size=10,
+        #     border=4,
+        # )
+        # qr.add_data(qr_code_value)
+        # qr.make(fit=True)
+        
+        # img = qr.make_image(fill_color="black", back_color="white")
+
+        #  # Simpan QR Code ke file
+        # qr_code_filename = f"qr_{license_plate}_{timestamp}.png"
+        # qr_code_path = os.path.join(save_dir_qr, qr_code_filename)
+        # img.save(qr_code_path)
+        
         vehicle = Vehicle(
             license_plate=license_plate,
             vehicle_type=vehicle_type,
@@ -208,7 +227,7 @@ def create_app():
 
         return jsonify({
             'message': 'Image and data saved successfully',
-            'license_plate': license_plate,
+            'license_plate': "T3181RK",
             'qr_code': qr_code_value,
             'entry_image_path': local_save_path
         }), 200
