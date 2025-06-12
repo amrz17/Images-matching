@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, Response, request, render_template
+import requests
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
@@ -17,12 +18,12 @@ import json
 from dotenv import load_dotenv
 import tempfile
 import requests
-import time
-import threading
-import subprocess  # Tambahkan ini untuk menjalankan file python lain
+
 # import qrcode
-import base64
-from io import BytesIO
+
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
 
 
 load_dotenv()  # Ini akan membaca file .env
@@ -30,6 +31,25 @@ camera_ip = os.getenv("CAMERA_IP")
 
 # Load model YOLO sekali saja saat startup
 model = YOLO("yolov8.pt")
+
+# Load model ResNet50
+model_resnet = models.resnet50(weights=None)
+model_resnet.load_state_dict(torch.load('resnet50.pth'))
+model_resnet.eval() # model evaluasi
+
+# Hilangkan bagian klasifikasi akhir (ambil fitur saja)
+feature_extractor = torch.nn.Sequential(*list(model_resnet.children())[:-1])
+
+# Resize and preprocessing for ResNet50
+transform = transforms.Compose([
+    transforms.Resize((224, 224)), # Resize 224x224
+    transforms.ToTensor(),  # Ubah format ke tensor pytorch
+    transforms.Normalize(  # sesuai mean/std ImageNet # Normalisasi channel warna
+        mean=[0.485, 0.456, 0.406], 
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
 
 # Contoh ambil variabel
 database_url = os.getenv("SQLALCHEMY_DATABASE_URI")
@@ -65,6 +85,9 @@ class VehicleExitLog(db.Model):
     exit_image_path = db.Column(db.String(255), nullable=False)
     match_score = db.Column(db.Float, nullable=True)
     match_status = db.Column(db.String(20), nullable=False)
+
+
+
 
 # APP SETUP 
 def create_app():
@@ -117,6 +140,54 @@ def create_app():
             detected_labels.append(label)
 
         return features, detected_labels
+    
+
+    def safe_json_serialize(obj):
+        # Konversi objek ke format yang bisa diserialisasi JSON
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.generic):
+            return obj.item()  # Konversi np.float32 ke float Python
+        elif isinstance(obj, (list, tuple)):
+            return [safe_json_serialize(x) for x in obj]
+        elif isinstance(obj, dict):
+            return {k: safe_json_serialize(v) for k, v in obj.items()}
+        return obj
+
+
+    def extract_features(img_array):
+        # Validasi input
+        if not isinstance(img_array, np.ndarray):
+            raise ValueError("Input harus berupa numpy array")
+        
+        # Konversi grayscale ke RGB 
+        if len(img_array.shape) == 2:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+        elif len(img_array.shape) == 3:
+            # Konversi BGR ke RGB untuk OpenCV
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+        else:
+            raise ValueError("Format gambar tidak didukung")
+        
+        try:
+            # Preprocess gambar
+            # Konversi ke PIL Image
+            img_array = Image.fromarray(img_array)
+
+            input_tensor = transform(img_array)
+            input_batch = input_tensor.unsqueeze(0)  # Tambah dimensi batch
+            
+            # Ekstrak fitur
+            with torch.no_grad():
+                features = feature_extractor(input_batch)  # Shape: [1, 2048, 7, 7]
+                features = torch.nn.functional.adaptive_avg_pool2d(features, (1, 1))  # Shape: [1, 2048, 1, 1]
+                features = features.flatten(start_dim=1)  # Shape: [1, 2048]
+            
+            return features
+        
+        except Exception as e:
+            print(f"Error saat ekstraksi fitur: {str(e)}")
+            return None
 
     def convert_uploaded_file_to_cv2(image_file):
         image = Image.open(image_file).convert("RGB")
@@ -173,7 +244,60 @@ def create_app():
                     break
 
         return detected_text
-    
+
+
+    def detect_and_crop_object(image_path, detection_model):
+        # Load image dari path
+        # Handle both file path and numpy array inputs
+        if isinstance(image_path, str):
+            # Jika input adalah path file
+            img = cv2.imread(image_path)
+            if img is None:
+                print(f"Error: Gagal memuat gambar dari {image_path}")
+                return None, None
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif isinstance(image_path, np.ndarray):
+            # Jika input sudah berupa numpy array (frame dari kamera)
+            img_rgb = cv2.cvtColor(image_path, cv2.COLOR_BGR2RGB)
+        else:
+            print("Error: Input harus berupa path gambar atau numpy array")
+            return None, None
+
+        labels_map = {
+            0: "Mobil",
+            1: "Motor",
+            2: "Plat Nomor"
+        }
+
+        # Deteksi objek
+        results = detection_model(img_rgb)
+        boxe = results[0].boxes
+
+        # Get all detected objects
+        features_list = []
+        class_ids = []
+
+        for result in results:
+            boxes = result.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+            classes = result.boxes.cls.cpu().numpy()  # Get class IDs
+            confidences = result.boxes.conf.cpu().numpy()  # Get confidence scores
+            class_ids = boxe.cls.cpu().numpy().astype(int).tolist()
+
+            for box, cls_id, conf in zip(boxes, classes, confidences):
+                # Only process class 1 (Mobil) or 2 (Motor)
+                if cls_id in [0, 1]:  
+                    label = labels_map.get(cls_id, "Unknown")
+                    x1, y1, x2, y2 = map(int, box)
+                    cropped_object = img_rgb[y1:y2, x1:x2]  # Crop detected object
+                    
+                    # Ekstrak fitur
+                    features = extract_features(cropped_object)
+                    if features is not None:
+                        features_list.append(features)
+                    # cropped_objects.append(cropped)
+                    class_ids.append(label)
+
+        return features, class_ids
     @app.route('/vehicle-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
@@ -259,9 +383,20 @@ def create_app():
         labels = model.names
         annotated_frame = results[0].plot()
 
-        features, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
-        features_json = json.dumps(features)
+        # features, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
+        # features_json = json.dumps(features)
+        # vehicle_types_json = json.dumps(detected_labels)
+
+        features, detected_labels = detect_and_crop_object(frame, model)
+        print("Tipe labels:", type(detected_labels))
+        print("feature", features.shape)
+
+        feature = features.tolist()  # ubah ke list Python 
+        features_json = json.dumps(feature)  # baru serialisasi ke JSON
+
         vehicle_types_json = json.dumps(detected_labels)
+
+        print("Label", vehicle_types_json)
 
         primary_label = "Unknown"
         for label in detected_labels:
@@ -431,6 +566,7 @@ def create_app():
 
         # Bulatkan skor similarity
         match_score = round(float(similarity), 3)
+        print(f"Match score: {match_score}")
 
         # Tentukan status kecocokan
         match_status = "matched" if match_score >= 0.9 else "not_matched"
