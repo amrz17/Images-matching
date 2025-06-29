@@ -6,7 +6,7 @@ function Content({ licensePlate, matchStatus}) {
       <div style={styles.container}>
         <div style={styles.photoContainer}>
             <div style={styles.photoBox}>
-                <img src="" />
+                {/* <img src="" /> */}
             </div>
             <div style={styles.plateNumber}>
                 <h2>{licensePlate}</h2>

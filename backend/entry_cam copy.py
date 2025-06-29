@@ -3,15 +3,9 @@ import cv2
 import json
 import requests
 import numpy as np
-from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
-
 from ultralytics import YOLO
-
-import torch
-import torchvision.models as models
-import torchvision.transforms as transforms
 
 # Inisialisasi model dan konfigurasi hanya sekali saat file diimport
 load_dotenv()

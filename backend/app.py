@@ -18,7 +18,10 @@ import json
 from dotenv import load_dotenv
 import tempfile
 import requests
+import ast
 
+
+# import qrcode
 # import qrcode
 
 import torch
@@ -31,6 +34,8 @@ camera_ip = os.getenv("CAMERA_IP")
 
 # Load model YOLO sekali saja saat startup
 model = YOLO("yolov8.pt")
+# Load model YOLO
+detection_model = YOLO("yolov8.pt")
 
 # Load model ResNet50
 model_resnet = models.resnet50(weights=None)
@@ -81,12 +86,12 @@ class VehicleExitLog(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
+    vehicle_type = db.Column(db.String(50), nullable=True)
+    feature = db.Column(db.Text)
     exit_time = db.Column(db.DateTime, nullable=False, default=current_time_wib)
     exit_image_path = db.Column(db.String(255), nullable=False)
     match_score = db.Column(db.Float, nullable=True)
     match_status = db.Column(db.String(20), nullable=False)
-
-
 
 
 # APP SETUP 
@@ -99,7 +104,8 @@ def create_app():
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Buat folder untuk simpan hasil frame kendaraan keluar
-    save_dir = "vehicle_detections/vehicle_exit"
+    save_dir = r"vehicle_detections/vehicle_exit/"
+    save_dir_entry = r"vehicle_detections/vehicle_entry/"
     save_dir_qr = "vehicle_detections/qr_code"
     os.makedirs(save_dir, exist_ok=True)
 
@@ -114,32 +120,32 @@ def create_app():
             
     @app.route('/')
     def hello():
-        return 'Hello, Flask di Ubuntu!'
+        return render_template('index.html')
 
-    def get_detected_objects_array(boxes1, class_ids, scores1):
-        labels_map = {
-            0: "Mobil",
-            1: "Motor",
-            2: "Plat Nomor"
-        }
-        features = []
-        detected_labels = []
-        for i, box in enumerate(boxes1):
-            class_idx = int(class_ids[i])
-            label = labels_map.get(class_idx, "Unknown")
-            confidence = float(scores1[i])
+    # def get_detected_objects_array(boxes1, class_ids, scores1):
+    #     labels_map = {
+    #         0: "Mobil",
+    #         1: "Motor",
+    #         2: "Plat Nomor"
+    #     }
+    #     features = []
+    #     detected_labels = []
+    #     for i, box in enumerate(boxes1):
+    #         class_idx = int(class_ids[i])
+    #         label = labels_map.get(class_idx, "Unknown")
+    #         confidence = float(scores1[i])
 
-            x, y, w, h = map(float, box)
-            x2 = x + w
-            y2 = y + h
+    #         x, y, w, h = map(float, box)
+    #         x2 = x + w
+    #         y2 = y + h
 
-            print(f"Object: {label} - Confidence: {confidence:.2f}")
-            print(f"Bounding Box (x1, y1, x2, y2): {x}, {y}, {x2}, {y2}")
+    #         print(f"Object: {label} - Confidence: {confidence:.2f}")
+    #         print(f"Bounding Box (x1, y1, x2, y2): {x}, {y}, {x2}, {y2}")
 
-            features.append([x, y, x2, y2])
-            detected_labels.append(label)
+    #         features.append([x, y, x2, y2])
+    #         detected_labels.append(label)
 
-        return features, detected_labels
+    #     return features, detected_labels
     
 
     def safe_json_serialize(obj):
@@ -153,6 +159,28 @@ def create_app():
         elif isinstance(obj, dict):
             return {k: safe_json_serialize(v) for k, v in obj.items()}
         return obj
+
+
+    # def buat_qr_code(data):
+    #     # Membuat QR Code
+    #     qr = qrcode.QRCode(
+    #         version=1,
+    #         error_correction=qrcode.constants.ERROR_CORRECT_L,
+    #         box_size=10,
+    #         border=4,
+    #     )
+    #     qr.add_data(data)
+    #     qr.make(fit=True)
+
+    #     # Membuat gambar dari QR code
+    #     img = qr.make_image(fill_color="black", back_color="white")
+
+    #     # Simpan frame asli (tanpa bounding box)
+    #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #     image_filename = "qr.jpg"
+    #     local_save_path = os.path.join(save_dir_qr, f"{image_filename}_{timestamp}.jpg")
+    #     cv2.imwrite(local_save_path, img)        # simpan ke penyimpanan lokal
+    #     print(f"QR Code berhasil disimpan sebagai {local_save_path}")
 
 
     def extract_features(img_array):
@@ -231,14 +259,20 @@ def create_app():
                         reader = easyocr.Reader(["en", "id"], gpu=False)
                         ocr_results = reader.readtext(plate_image)
 
-                        for detection in ocr_results:
-                            text = detection[1]
-                            confidence = detection[2]
-                            print(f"Detected text: {text}, confidence: {confidence}")
+                        # Filter dan urutkan hasil berdasarkan posisi horizontal (x kiri atas)
+                        filtered_results = [
+                            (detection[0][0][0], correct_ocr(detection[1]), detection[2])
+                            for detection in ocr_results
+                            if detection[2] > 0.8  # confidence > 0.8
+                        ]
 
-                            if confidence >= 0.55:
-                                detected_text = correct_ocr(text) if 'correct_ocr' in globals() else text
-                                break
+                        # Urutkan dari kiri ke kanan berdasarkan koordinat x
+                        filtered_results.sort(key=lambda x: x[0])
+
+                        # Satukan semua hasil dalam satu string
+                        detected_text = " ".join([item[1] for item in filtered_results])
+
+                        print(f"Final Corrected OCR Result (confidence > 0.8): {detected_text}")
                     except Exception as e:
                         print(f"OCR processing failed: {e}")
                     break
@@ -246,6 +280,61 @@ def create_app():
         return detected_text
 
 
+    # def detect_and_crop_object(image_path, detection_model):
+    #     # Load image dari path
+    #     # Handle both file path and numpy array inputs
+    #     if isinstance(image_path, str):
+    #         # Jika input adalah path file
+    #         img = cv2.imread(image_path)
+    #         if img is None:
+    #             print(f"Error: Gagal memuat gambar dari {image_path}")
+    #             return None, None
+    #         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    #     elif isinstance(image_path, np.ndarray):
+    #         # Jika input sudah berupa numpy array (frame dari kamera)
+    #         img_rgb = cv2.cvtColor(image_path, cv2.COLOR_BGR2RGB)
+    #     else:
+    #         print("Error: Input harus berupa path gambar atau numpy array")
+    #         return None, None
+
+    #     labels_map = {
+    #         0: "Mobil",
+    #         1: "Motor",
+    #         2: "Plat Nomor"
+    #     }
+
+    #     # Deteksi objek
+    #     results = detection_model(img_rgb)
+    #     boxe = results[0].boxes
+
+    #     # Get all detected objects
+    #     features_list = []
+    #     class_ids = []
+
+    #     for result in results:
+    #         boxes = result.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+    #         classes = result.boxes.cls.cpu().numpy()  # Get class IDs
+    #         confidences = result.boxes.conf.cpu().numpy()  # Get confidence scores
+    #         class_ids = boxe.cls.cpu().numpy().astype(int).tolist()
+
+    #         for box, cls_id, conf in zip(boxes, classes, confidences):
+    #             # Only process class 1 (Mobil) or 2 (Motor)
+    #             if cls_id in [0, 1]:  
+    #                 label = labels_map.get(cls_id, "Unknown")
+    #                 x1, y1, x2, y2 = map(int, box)
+    #                 # Crop detected object
+    #                 cropped_object = img_rgb[y1:y2, x1:x2]  
+                    
+    #                 # Ekstrak fitur
+    #                 features = extract_features(cropped_object)
+    #                 if features is not None:
+    #                     features_list.append(features)
+    #                 # cropped_objects.append(cropped)
+    #                 class_ids.append(label)
+
+    #     return features, class_ids
+
+    # Detection with yolo
     def detect_and_crop_object(image_path, detection_model):
         # Load image dari path
         # Handle both file path and numpy array inputs
@@ -298,6 +387,7 @@ def create_app():
                     class_ids.append(label)
 
         return features, class_ids
+
     @app.route('/vehicle-entry', methods=['POST'])
     def upload_entry():
         if 'image' not in request.files:
@@ -308,36 +398,81 @@ def create_app():
         vehicle_type = request.form.get('vehicle_type')
         local_save_path = request.form.get('entry_image_path')
 
+        # # Untuk real-time frame
+        # image = request.files['image']
+# 
         license_plate  = detect_license_plate_text(
             image_file=image,
             model_path="yolov8.pt"
         )
 
-        print("License plate text:", license_plate)
+        # file_bytes = np.frombuffer(image.read(), dtype=np.uint8)
+        # image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)  # <-- hasilnya sama tipe seperti 'frame'
+        # print(type(image))
 
-        # if not image or not license_plate:
-        #     return jsonify({'error': 'Missing data'}), 400
+        # # Mulai dari sini api real-time di app
+        # # Baca isi file dan konversi ke np.ndarray (mirip frame webcam)
+        # license_plate = license_plate 
+        # print("License plate text:", license_plate)
+
+        # results = model.predict(image)
+        # boxes = results[0].boxes
+        # boxes1 = boxes.xywh.cpu().numpy()
+        # scores1 = boxes.conf.cpu().numpy()
+        # class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
+        # labels = model.names
+        # annotated_frame = results[0].plot()
+
+        # features, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
+        # features_json = json.dumps(features)
+        # vehicle_types_json = json.dumps(detected_labels)
+
+        # features, detected_labels = detect_and_crop_object(image, model)
+        # print("Tipe labels:", type(detected_labels))
+        # print("feature", features.shape)
+
+        # feature = features.tolist()  # ubah ke list Python 
+        # features_json = json.dumps(feature)  # baru serialisasi ke JSON
+
+        # vehicle_type = json.dumps(detected_labels)
+
+        # print("Label", vehicle_types_json)
+
+        # primary_label = "Unknown"
+        # for label in detected_labels:
+        #     if label in ["Mobil", "Motor"]:
+        #         primary_label = label
+        #         break
+        
+        # # Simpan frame asli (tanpa bounding box)
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # image_filename = "original_image.jpg"
+        # local_save_path = os.path.join(save_dir_entry, f"{primary_label}_{timestamp}.jpg")
+        # annotated_filename = os.path.join(save_dir_entry, f"{primary_label}_{timestamp}_annotated.jpg")
+
+        # cv2.imwrite(image_filename, image)         # untuk dikirim ke API
+        # cv2.imwrite(local_save_path, image)        # simpan ke penyimpanan lokal
+        # cv2.imwrite(annotated_filename, annotated_frame)
+        # print(f"[+] Gambar asli disimpan di: {local_save_path}")
+
+        # # akhir dari sini untuk api real-time di app
+
+        if not image or not license_plate:
+            return jsonify({'error': 'Missing data'}), 400
 
          # buat nama file
         timestamp = datetime.now(pytz.timezone("Asia/Jakarta")).strftime('%Y%m%d%H%M%S')
 
         # simpan ke database
         qr_code_value = f"{license_plate}_{timestamp}"
-        # qr = qrcode.QRCode(
-        #     version=1,
-        #     error_correction=qrcode.constants.ERROR_CORRECT_L,
-        #     box_size=10,
-        #     border=4,
-        # )
-        # qr.add_data(qr_code_value)
-        # qr.make(fit=True)
-        
-        # img = qr.make_image(fill_color="black", back_color="white")
 
-        #  # Simpan QR Code ke file
-        # qr_code_filename = f"qr_{license_plate}_{timestamp}.png"
-        # qr_code_path = os.path.join(save_dir_qr, qr_code_filename)
-        # img.save(qr_code_path)
+        # # Simpan frame asli (tanpa bounding box)
+        # image_qr = "qr_code.jpg"
+        # local_save_qr = os.path.join(save_dir_qr, f"{qr_code_value}.jpg")
+
+        # cv2.imwrite(image_qr, qr)         # untuk dikirim ke API
+        # cv2.imwrite(local_save_qr, qr)        # simpan ke penyimpanan lokal
+        # print(f"[+] Gambar asli disimpan di: {local_save_qr}")
         
         vehicle = Vehicle(
             license_plate=license_plate,
@@ -351,16 +486,34 @@ def create_app():
 
         return jsonify({
             'message': 'Image and data saved successfully',
-            'license_plate': "T3181RK",
+            'license_plate': license_plate,
             'qr_code': qr_code_value,
             'entry_image_path': local_save_path
         }), 200
+    
+    @app.route('/vehicle-entry', methods=['GET'])
+    def get_vehicle_entry():
+        return jsonify({
+            "message": "Image and data saved successfully",
+            "entry_image_path": "static/images/vehicle_123.jpg"
+    })
+
 
     # Endpoint untuk menerima dan langsung memberikan QR code (tanpa menyimpan)
     @app.route('/get-latest-qr', methods=['POST'])
     def get_latest_qr():
         data = request.get_json()
         qr_code = data.get("qr_code")
+        
+        # # Untuk Input Postman
+        # qr_code = request.form.get("qr_code")
+        # file = request.files['image']
+
+        # # Baca isi file dan konversi ke np.ndarray (mirip frame webcam)
+        # file_bytes = np.frombuffer(file.read(), np.uint8)
+        # image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)  # <-- hasilnya sama tipe seperti 'frame'
+        # # Sampai sini
+
 
         if not qr_code:
             return jsonify({"error": "qr_code tidak ditemukan"}), 400
@@ -375,20 +528,41 @@ def create_app():
             cap.release()
             return jsonify({"error": "Gagal membaca frame"}), 500
 
-        results = model.predict(frame)
+        # results = model.predict(frame)
+        # boxes = results[0].boxes
+        # # # boxes1 = boxes.xywh.cpu().numpy()
+        # # # scores1 = boxes.conf.cpu().numpy()
+        # class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
+        # # # labels = model.names
+        # annotated_frame = results[0].plot()
+
+        # Proses deteksi
+        results = detection_model.predict(frame)
         boxes = results[0].boxes
-        boxes1 = boxes.xywh.cpu().numpy()
-        scores1 = boxes.conf.cpu().numpy()
         class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
-        labels = model.names
         annotated_frame = results[0].plot()
 
-        # features, detected_labels = get_detected_objects_array(boxes1, class_ids, scores1)
+        features, detected_labels = detect_and_crop_object(frame, detection_model)
         # features_json = json.dumps(features)
-        # vehicle_types_json = json.dumps(detected_labels)
+        # vehicle_types_json = json.dumps(class_ids)
 
-        features, detected_labels = detect_and_crop_object(frame, model)
+
+
+        # print("Tipe labels:", type(class_ids))
+        # print("feature", features.shape)
+
+        # feature = features.tolist()  # ubah ke list Python 
+        # features_json = json.dumps(feature)  # baru serialisasi ke JSON
+
+        # vehicle_types_json = json.dumps(class_ids)
+
+        # print("Label", vehicle_types_json)
+
+
         print("Tipe labels:", type(detected_labels))
+        print("Labels:", detected_labels)
+        detected_labels = [item for item in detected_labels if isinstance(item, str)]
+        print("Tipe Features:", type(features))
         print("feature", features.shape)
 
         feature = features.tolist()  # ubah ke list Python 
@@ -398,16 +572,16 @@ def create_app():
 
         print("Label", vehicle_types_json)
 
-        primary_label = "Unknown"
-        for label in detected_labels:
-            if label in ["Mobil", "Motor"]:
-                primary_label = label
-                break
+        # primary_label = "Unknown"
+        # for label in class_ids:
+        #     if label in ["Mobil", "Motor"]:
+        #         primary_label = label
+        #         break
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        image_filename = "original_image.jpg"
-        local_save_path = os.path.join(save_dir, f"{primary_label}_{timestamp}.jpg")
-        annotated_filename = os.path.join(save_dir, f"{primary_label}_{timestamp}_annotated.jpg")
+        image_filename = "original_exit_image.jpg"
+        local_save_path = os.path.join(save_dir, f"{image_filename}_{timestamp}.jpg")
+        annotated_filename = os.path.join(save_dir, f"{image_filename}_{timestamp}_annotated.jpg")
 
         cv2.imwrite(image_filename, frame)
         cv2.imwrite(local_save_path, frame)
@@ -438,6 +612,7 @@ def create_app():
         cap.release()
         cv2.destroyAllWindows()
 
+
     # Endpoint untuk menerima citra kendaraan keluar dan untuk
     # menjalankan fungsi pencocokan kendaraan masuk dan keluar
     @app.route('/vehicle-exit', methods=['POST'])
@@ -453,13 +628,6 @@ def create_app():
         if not vehicle:
             return jsonify({'error': 'Vehicle not found'}), 404
         
-        # Step 2: QR code ditemukan, jalankan exit_cam.py
-        # try:
-        #     result = subprocess.run(['python', 'exit_cam.py'], check=True, capture_output=True, text=True)
-        #     print('exit_cam.py output:', result.stdout)
-        # except subprocess.CalledProcessError as e:
-        #     return jsonify({'error': f'Failed to run exit_cam.py: {e.stderr}'}), 500
-
         image = request.files['image']
         feature = request.form.get('feature')
         vehicle_type = request.form.get('vehicle_type')
@@ -474,7 +642,7 @@ def create_app():
         )
         
         # Mapping singkatan ke label lengkap
-        type_aliases = {'M': 'Motor', 'MB': 'Mobil', 'P': 'Plat Nomor'}
+        # type_aliases = {'M': 'Motor', 'MB': 'Mobil', 'P': 'Plat Nomor'}
 
         # Exit Data Vehicle
         vehicle_type_exit = vehicle_type  # Bisa berupa string atau list JSON
@@ -485,7 +653,7 @@ def create_app():
                 vehicle_type_exit = [vehicle_type_exit]  # Jika hanya satu label, bungkus jadi list
 
         # Konversi singkatan ke label lengkap
-        vehicle_type_exit = [type_aliases.get(v, v) for v in vehicle_type_exit]
+        # vehicle_type_exit = [type_aliases.get(v, v) for v in vehicle_type_exit]
         license_plate_exit = license_plate
         features2 = feature
 
@@ -502,7 +670,7 @@ def create_app():
             vehicle_type_entry = [vehicle_type_entry]
 
         # Konversi singkatan ke label lengkap
-        vehicle_type_entry = [type_aliases.get(v, v) for v in vehicle_type_entry]
+        # vehicle_type_entry = [type_aliases.get(v, v) for v in vehicle_type_entry]
 
         # Mapping label ke angka
         label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}
@@ -514,7 +682,8 @@ def create_app():
             print(f"[ERROR] Label tidak ditemukan dalam label_map: {e}")
             labels_entry_numeric, labels_exit_numeric = [], []  # Atau lakukan penanganan lain
 
-        features1 = np.array(json.loads(features1_str))  # bentuk array float
+        # features1 = np.array(json.loads(features1_str))  # bentuk array float
+        # features1 = np.array(ast.literal_eval(features1_str))
         features2 = np.array(json.loads(features2))  # bentuk array float
 
         # features2 = features2
@@ -531,14 +700,14 @@ def create_app():
         # Image Matching logic
         # Gabungkan fitur + label
         try:
-            # features1 = json.loads(features1)
-            features1 = features1.tolist()  # Convert numpy array to list
+            features1 = json.loads(features1_str)
+            # features1 = features1.tolist()  # Convert numpy array to list
             # features1 = json.dumps(features1)  # Then convert to JSON stringk
         except json.JSONDecodeError:
             print("[ERROR] Gagal parse JSON dari features1_str")
             features1 = []
 
-                # Pastikan features1_str dan features2 adalah numpy array
+        # Pastikan features1_str dan features2 adalah numpy array
         features1_array = np.array(features1, dtype=np.float32)
         features2_array = np.array(features2, dtype=np.float32)
 
@@ -569,12 +738,14 @@ def create_app():
         print(f"Match score: {match_score}")
 
         # Tentukan status kecocokan
-        match_status = "matched" if match_score >= 0.9 else "not_matched"
+        match_status = "matched" if match_score >= 0.8 else "not_matched"
         print(f"Data {match_status}")
 
         # Simpan log keluar
         exit_log = VehicleExitLog(
             vehicle_id=vehicle.id,
+            vehicle_type=vehicle_type_exit,
+            feature=feature,
             exit_image_path=local_save_path,
             match_score=match_score,
             match_status=match_status
@@ -592,7 +763,6 @@ def create_app():
             'exit_image_path': local_save_path,
             'match_score': match_score,
             'match_status': match_status,
-            'vehicle_match': is_match  # Tambahan info cocok/tidak
         }), 200
 
     return app
@@ -600,4 +770,4 @@ def create_app():
 # MAIN
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True)
+    app.run(debug=False)

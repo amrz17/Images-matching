@@ -1,0 +1,49 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+.header {
+    background-color: #e0e0e0;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+    font-size: 18px;
+    border-bottom: 2px solid black;
+}
+
+.content {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    height: 80vh;
+    padding: 20px;
+}
+
+.vehicle-section {
+    text-align: center;
+}
+
+.title {
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+.box {
+    width: 200px;
+    height: 300px;
+    background-color: lightgray;
+    border: 1px solid #888;
+}
+
+.scanner {
+    text-align: center;
+    font-weight: bold;
+}
+
+.scanner-icon {
+    margin-top: 10px;
+    font-size: 24px;
+}

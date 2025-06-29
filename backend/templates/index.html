@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vehicle Inspection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="header">
+        <div class="left">VEHICLE INSPECTION</div>
+        <div class="right">FOR SAFETY</div>
+    </div>
+
+    <div class="content">
+        <div class="vehicle-section">
+            <div class="title">VEHICLE IN</div>
+            <div id="vehicle-entry" class="box">[Data kendaraan akan muncul di sini]</div>
+        </div>
+
+        <div class="scanner">
+            <p>SCAN<br>YOUR<br>TICKET<br>ON SCANNER</p>
+            <div class="scanner-icon">◼️</div>
+        </div>
+
+        <div class="vehicle-section">
+            <div class="title">VEHICLE OUT</div>
+            <div class="box"></div>
+        </div>
+    </div>
+    <script>
+        async function getEntryData() {
+            try {
+                const response = await fetch('http://localhost:5000/vehicle-entry');
+                const data = await response.json();
+                console.log("Datanya adalah: ", data)
+
+                if (data.message === 'Image and data saved successfully') {
+                    // Jika ingin tampilkan teks
+                    // document.getElementById('vehicle-entry').innerText = data.entry_image_path;
+
+                    // Jika ingin tampilkan gambar
+                    document.getElementById('vehicle-entry').innerHTML =
+                        `<img src="${data.entry_image_path}" width="300" alt="Vehicle In Image">`;
+                    console.log("Suskes")
+                } else {
+                    document.getElementById('vehicle-entry').innerText = "Tidak ada data kendaraan.";
+                    console.log("Gagal")
+                }
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('vehicle-entry').innerText = "Gagal mengambil data.";
+            }
+        }
+
+        // Panggil saat halaman dimuat
+        window.onload = getEntryData;
+    </script>
+</body>
+</html>

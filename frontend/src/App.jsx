@@ -1,6 +1,8 @@
 import './App.css'
 import Content from './Content'
+import ContentDummy from './Contentdummy'
 import Header from './Header'
+import ImportImage from './ImportImage'
 
 function App() {
 
@@ -8,6 +10,8 @@ function App() {
     <>
       <Header />
       <Content />
+      {/* <ContentDummy /> */}
+      {/* <ImportImage /> */}
     </>
   )
 }

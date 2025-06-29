@@ -41,7 +41,7 @@ transform = transforms.Compose([
 ])
 
 # Buat folder untuk simpan hasil frame
-save_dir = "vehicle_detections/vehicle_entry"
+save_dir = r"vehicle_detections/vehicle_entry/"
 os.makedirs(save_dir, exist_ok=True)
 
 # Buka kamera
@@ -166,6 +166,8 @@ def detect_and_crop_object(image_path, detection_model):
 
 features, detected_labels = detect_and_crop_object(frame, detection_model)
 print("Tipe labels:", type(detected_labels))
+print("Labels:", detected_labels)
+print("Tipe Features:", type(features))
 print("feature", features.shape)
 
 feature = features.tolist()  # ubah ke list Python 
@@ -199,7 +201,7 @@ cv2.imwrite(local_save_path, frame)        # simpan ke penyimpanan lokal
 cv2.imwrite(annotated_filename, annotated_frame)
 print(f"[+] Gambar asli disimpan di: {local_save_path}")
 
-# Kirim hanya jika class 0 dan 2, atau 1 dan 2 terdeteksi
+# # Kirim hanya jika class 0 dan 2, atau 1 dan 2 terdeteksi
 if (0 in class_ids and 2 in class_ids) or (1 in class_ids and 2 in class_ids):
     try:
         with open(image_filename, 'rb') as img_file:
