@@ -30,9 +30,11 @@ class CameraApp:
         # Inisialisasi kamera
         self.cap_left = 0
         self.cap_right = 0
+        self.cap_qr = "http://192.168.137.166:4747/video"
         # self.cap_right = "http://192.168.137.46:4747/video"
         self.is_camera_left_active = False
         self.is_camera_right_active = False
+        self.is_camera_qr_active = False
         self.scan_qr_active = False
         
         # Buat frame kamera
@@ -142,7 +144,7 @@ class CameraApp:
 
     def start_camera_left(self):
         if not self.is_camera_left_active:
-            self.cap_left = cv2.VideoCapture("http://192.168.1.6:4747/video")
+            self.cap_left = cv2.VideoCapture(0)
             if not self.cap_left.isOpened():
                 messagebox.showerror("Error", "Tidak dapat mengakses kamera 1")
                 return
@@ -191,7 +193,7 @@ class CameraApp:
 
     def start_camera_right(self):
         if not self.is_camera_right_active:
-            self.cap_right = cv2.VideoCapture("http://192.168.1.6:4747/video")
+            self.cap_right = cv2.VideoCapture(0)
             if not self.cap_right.isOpened():
                 messagebox.showerror("Error", "Tidak dapat mengakses kamera 2")
                 return
@@ -199,6 +201,25 @@ class CameraApp:
             self.stop_btn.config(state=tk.NORMAL)
             self.update_frame_right()
     
+    def start_camera_qr(self):
+        if not self.is_camera_qr_active:
+            self.cap_qr = cv2.VideoCapture(0)
+            if not self.qr.isOpened():
+                messagebox.showerror("Error", "Tidak dapat mengakses kamera QR Code")
+                return
+            self.is_camera_qr_active = True
+            self.stop_btn.config(state=tk.NORMAL)
+            self.update_frame_right()
+
+    def update_frame_qr(self):
+        if self.is_camera_qr_active and self.cap_qr:
+            ret, frame = self.cap_qr.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame)
+                imgtk = ImageTk.PhotoImage(image=img)
+            self.root.after(10, self.update_frame_qr)
+
     def update_frame_right(self):
         if self.is_camera_right_active and self.cap_right:
             ret, frame = self.cap_right.read()
@@ -226,20 +247,20 @@ class CameraApp:
     #     self.scan_qr_code()
 
     def start_scan_qr(self):
-        if not self.is_camera_right_active:
-            self.cap_right = cv2.VideoCapture("http://192.168.1.6:4747/video")  # Simpan objek kamera ke self.cap_right
+        if not self.is_camera_qr_active:
+            self.cap_qr = cv2.VideoCapture("http://192.168.137.166:4747/video")  # Simpan objek kamera ke self.cap_right
 
-            if not self.cap_right.isOpened():
-                messagebox.showerror("Error", "Tidak dapat mengakses kamera 2")
+            if not self.cap_qr.isOpened():
+                messagebox.showerror("Error", "Tidak dapat mengakses kamera QR Code")
                 return
 
-            self.is_camera_right_active = True
+            self.is_camera_qr_active = True
             self.stop_btn.config(state=tk.NORMAL)
 
             # Jangan tampilkan frame di GUI (hapus self.update_frame_right())
             # Tapi tetap bisa ambil frame dalam background (di scan_qr_code)
 
-        if not self.is_camera_right_active:
+        if not self.is_camera_qr_active:
             messagebox.showwarning("Peringatan", "Kamera kanan belum aktif.")
             return
 
@@ -248,8 +269,8 @@ class CameraApp:
 
 
     def scan_qr_code(self):
-        if self.cap_right and self.cap_right.isOpened() and self.scan_qr_active:
-            ret, frame = self.cap_right.read()
+        if self.cap_qr and self.cap_qr.isOpened() and self.scan_qr_active:
+            ret, frame = self.cap_qr.read()
             if ret:
                 detector = cv2.QRCodeDetector()
                 data, vertices, _ = detector.detectAndDecode(frame)
@@ -277,9 +298,9 @@ class CameraApp:
             self.root.after(100, self.scan_qr_code)  # lanjut scan kalau belum ditemukan
 
     def stop_camera_qr(self, qr_code):
-        if self.cap_right and self.is_camera_right_active:
-            self.cap_right.release()
-            self.is_camera_right_active = False
+        if self.cap_qr and self.is_camera_qr_active:
+            self.cap_qr.release()
+            self.is_camera_qr_active = False
             self.update_result(f"qr code Untuk API: {qr_code}")
 
 
@@ -288,9 +309,12 @@ class CameraApp:
             self.cap_left.release()
         if self.cap_right:
             self.cap_right.release()
+        if self.capqr:
+            self.cap_qr.release()
         
         self.is_camera_left_active = False
         self.is_camera_right_active = False
+        self.is_camera_qr_active = False
 
         self.left_label.config(image='')
         self.right_label.config(image='')

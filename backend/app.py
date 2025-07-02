@@ -505,16 +505,6 @@ def create_app():
         data = request.get_json()
         qr_code = data.get("qr_code")
         
-        # # Untuk Input Postman
-        # qr_code = request.form.get("qr_code")
-        # file = request.files['image']
-
-        # # Baca isi file dan konversi ke np.ndarray (mirip frame webcam)
-        # file_bytes = np.frombuffer(file.read(), np.uint8)
-        # image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)  # <-- hasilnya sama tipe seperti 'frame'
-        # # Sampai sini
-
-
         if not qr_code:
             return jsonify({"error": "qr_code tidak ditemukan"}), 400
 
@@ -528,14 +518,6 @@ def create_app():
             cap.release()
             return jsonify({"error": "Gagal membaca frame"}), 500
 
-        # results = model.predict(frame)
-        # boxes = results[0].boxes
-        # # # boxes1 = boxes.xywh.cpu().numpy()
-        # # # scores1 = boxes.conf.cpu().numpy()
-        # class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
-        # # # labels = model.names
-        # annotated_frame = results[0].plot()
-
         # Proses deteksi
         results = detection_model.predict(frame)
         boxes = results[0].boxes
@@ -543,21 +525,6 @@ def create_app():
         annotated_frame = results[0].plot()
 
         features, detected_labels = detect_and_crop_object(frame, detection_model)
-        # features_json = json.dumps(features)
-        # vehicle_types_json = json.dumps(class_ids)
-
-
-
-        # print("Tipe labels:", type(class_ids))
-        # print("feature", features.shape)
-
-        # feature = features.tolist()  # ubah ke list Python 
-        # features_json = json.dumps(feature)  # baru serialisasi ke JSON
-
-        # vehicle_types_json = json.dumps(class_ids)
-
-        # print("Label", vehicle_types_json)
-
 
         print("Tipe labels:", type(detected_labels))
         print("Labels:", detected_labels)
@@ -571,12 +538,6 @@ def create_app():
         vehicle_types_json = json.dumps(detected_labels)
 
         print("Label", vehicle_types_json)
-
-        # primary_label = "Unknown"
-        # for label in class_ids:
-        #     if label in ["Mobil", "Motor"]:
-        #         primary_label = label
-        #         break
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         image_filename = "original_exit_image.jpg"
@@ -641,9 +602,6 @@ def create_app():
             model_path="yolov8.pt"
         )
         
-        # Mapping singkatan ke label lengkap
-        # type_aliases = {'M': 'Motor', 'MB': 'Mobil', 'P': 'Plat Nomor'}
-
         # Exit Data Vehicle
         vehicle_type_exit = vehicle_type  # Bisa berupa string atau list JSON
         if isinstance(vehicle_type_exit, str):
@@ -652,8 +610,6 @@ def create_app():
             except json.JSONDecodeError:
                 vehicle_type_exit = [vehicle_type_exit]  # Jika hanya satu label, bungkus jadi list
 
-        # Konversi singkatan ke label lengkap
-        # vehicle_type_exit = [type_aliases.get(v, v) for v in vehicle_type_exit]
         license_plate_exit = license_plate
         features2 = feature
 
@@ -669,9 +625,6 @@ def create_app():
         except json.JSONDecodeError:
             vehicle_type_entry = [vehicle_type_entry]
 
-        # Konversi singkatan ke label lengkap
-        # vehicle_type_entry = [type_aliases.get(v, v) for v in vehicle_type_entry]
-
         # Mapping label ke angka
         label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}
 
@@ -682,11 +635,7 @@ def create_app():
             print(f"[ERROR] Label tidak ditemukan dalam label_map: {e}")
             labels_entry_numeric, labels_exit_numeric = [], []  # Atau lakukan penanganan lain
 
-        # features1 = np.array(json.loads(features1_str))  # bentuk array float
-        # features1 = np.array(ast.literal_eval(features1_str))
         features2 = np.array(json.loads(features2))  # bentuk array float
-
-        # features2 = features2
 
         # Cocokan Kendaraan masuk dan keluar
         is_match = False
@@ -764,6 +713,208 @@ def create_app():
             'match_score': match_score,
             'match_status': match_status,
         }), 200
+
+    
+    # Untuk GUI TkInter
+
+    # Endpoint untuk menerima dan langsung memberikan QR code (tanpa menyimpan)
+    @app.route('/get-qr-code', methods=['POST'])
+    def get_qr_code():
+        data = request.get_json()
+        qr_code = data.get("qr_code")
+        
+        if not qr_code:
+            return jsonify({"error": "qr_code tidak ditemukan"}), 400
+
+        try:
+                data = {
+                    'qr_code': qr_code,
+                }
+                response = requests.post("http://localhost:5000/vehicle-exit", data=data)
+
+                if response.status_code == 200:
+                    return jsonify(response.json()), 200
+                else:
+                    return jsonify({"error": response.text}), response.status_code
+
+        except requests.exceptions.RequestException as e:
+            return jsonify({"error": str(e)}), 500
+
+    # Endpoint untuk menerima citra kendaraan keluar dan untuk
+    # menjalankan fungsi pencocokan kendaraan masuk dan keluar
+    @app.route('/vehicle-exitv2', methods=['POST'])
+    def upload_exitv2():
+
+        qr_code = request.form.get('qr_code')
+
+        if not qr_code:
+            return jsonify({'error': 'Missing data'}), 400
+
+        # Cari kendaraan berdasarkan QR code
+        vehicle = Vehicle.query.filter_by(qr_code=qr_code).first()
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found'}), 404
+        
+        # Mulai proses deteksi
+        cap = cv2.VideoCapture(camera_ip)
+        if not cap.isOpened():
+            return jsonify({"error": "Gagal membuka kamera"}), 500
+
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            return jsonify({"error": "Gagal membaca frame"}), 500
+
+        # Proses deteksi
+        results = detection_model.predict(frame)
+        boxes = results[0].boxes
+        class_ids = boxes.cls.cpu().numpy().astype(int).tolist()
+        annotated_frame = results[0].plot()
+
+        features, detected_labels = detect_and_crop_object(frame, detection_model)
+
+        print("Tipe labels:", type(detected_labels))
+        print("Labels:", detected_labels)
+        detected_labels = [item for item in detected_labels if isinstance(item, str)]
+        print("Tipe Features:", type(features))
+        print("feature", features.shape)
+
+        feature = features.tolist()  # ubah ke list Python 
+        features_json = json.dumps(feature)  # baru serialisasi ke JSON
+
+        vehicle_types_json = json.dumps(detected_labels)
+
+        print("Label", vehicle_types_json)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_filename = "original_exit_image.jpg"
+        local_save_path = os.path.join(save_dir, f"{image_filename}_{timestamp}.jpg")
+        annotated_filename = os.path.join(save_dir, f"{image_filename}_{timestamp}_annotated.jpg")
+
+        cv2.imwrite(image_filename, frame)
+        cv2.imwrite(local_save_path, frame)
+        cv2.imwrite(annotated_filename, annotated_frame)
+        
+        if not frame:
+            return jsonify({'error': 'Missing image'}), 400
+        
+        license_plate = detect_license_plate_text(
+            image_file=frame,
+            model_path="yolov8.pt"
+        )
+        
+        # Exit Data Vehicle
+        vehicle_type_exit = vehicle_types_json  # Bisa berupa string atau list JSON
+        if isinstance(vehicle_type_exit, str):
+            try:
+                vehicle_type_exit = json.loads(vehicle_type_exit)
+            except json.JSONDecodeError:
+                vehicle_type_exit = [vehicle_type_exit]  # Jika hanya satu label, bungkus jadi list
+
+        license_plate_exit = license_plate
+        features2 = feature
+
+        # Entry Data Vehicle
+        license_plate_entry = vehicle.license_plate
+        vehicle_type_entry = vehicle.vehicle_type  # Berformat string JSON
+        features1_str = vehicle.feature
+        print("vehicle_type_entry (raw):", vehicle_type_entry)
+
+        # Decode JSON string
+        try:
+            vehicle_type_entry = json.loads(vehicle_type_entry)
+        except json.JSONDecodeError:
+            vehicle_type_entry = [vehicle_type_entry]
+
+        # Mapping label ke angka
+        label_map = {"Mobil": 0, "Motor": 1, "Plat Nomor": 2}
+
+        try:
+            labels_entry_numeric = [label_map[label] for label in vehicle_type_entry]
+            labels_exit_numeric = [label_map[label] for label in vehicle_type_exit]
+        except KeyError as e:
+            print(f"[ERROR] Label tidak ditemukan dalam label_map: {e}")
+            labels_entry_numeric, labels_exit_numeric = [], []  # Atau lakukan penanganan lain
+
+        features2 = np.array(json.loads(features2))  # bentuk array float
+
+        # Cocokan Kendaraan masuk dan keluar
+        is_match = False
+        if license_plate_exit == license_plate_entry and vehicle_type_exit == vehicle_type_entry:
+            print("Cocok! Data kendaraan sesuai.")
+            is_match = True
+        else:
+            print("Data tidak cocok. Pemeriksaan manual dibutuhkan.")
+
+
+        # Image Matching logic
+        # Gabungkan fitur + label
+        try:
+            features1 = json.loads(features1_str)
+            # features1 = features1.tolist()  # Convert numpy array to list
+            # features1 = json.dumps(features1)  # Then convert to JSON stringk
+        except json.JSONDecodeError:
+            print("[ERROR] Gagal parse JSON dari features1_str")
+            features1 = []
+
+        # Pastikan features1_str dan features2 adalah numpy array
+        features1_array = np.array(features1, dtype=np.float32)
+        features2_array = np.array(features2, dtype=np.float32)
+
+        # Flatten fitur
+        features1_flat = features1_array.flatten()
+        features2_flat = features2_array.flatten()
+
+        # Validasi dan pemotongan label agar sesuai jumlah box (kalau perlu)
+        labels_entry_numeric = np.array(labels_entry_numeric, dtype=np.float32)
+        labels_exit_numeric = np.array(labels_exit_numeric, dtype=np.float32)
+
+        # Sesuaikan panjang label dengan panjang fitur
+        num_boxes_entry = len(features1_flat)   
+        num_boxes_exit = len(features2_flat)
+
+        labels_entry_trimmed = labels_entry_numeric[:num_boxes_entry]
+        labels_exit_trimmed = labels_exit_numeric[:num_boxes_exit]
+
+        # Gabungkan fitur + label
+        features1_combined = np.hstack([features1_flat, labels_entry_trimmed])
+        features2_combined = np.hstack([features2_flat, labels_exit_trimmed])
+
+        # Hitung cosine similarity
+        similarity = cosine_similarity([features1_combined], [features2_combined])[0][0]
+
+        # Bulatkan skor similarity
+        match_score = round(float(similarity), 3)
+        print(f"Match score: {match_score}")
+
+        # Tentukan status kecocokan
+        match_status = "matched" if match_score >= 0.8 else "not_matched"
+        print(f"Data {match_status}")
+
+        # Simpan log keluar
+        exit_log = VehicleExitLog(
+            vehicle_id=vehicle.id,
+            vehicle_type=vehicle_type_exit,
+            feature=feature,
+            exit_image_path=local_save_path,
+            match_score=match_score,
+            match_status=match_status
+        )
+        db.session.add(exit_log)
+
+        # Tandai kendaraan sudah keluar
+        vehicle.is_exit = True
+        db.session.commit()
+
+        # Kembalikan respons ke client
+        return jsonify({
+            'message': 'Exit data saved successfully',
+            'license_plate': vehicle.license_plate,
+            'exit_image_path': local_save_path,
+            'match_score': match_score,
+            'match_status': match_status,
+        }), 200
+
 
     return app
 
